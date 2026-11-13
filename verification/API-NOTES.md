@@ -5,7 +5,7 @@
 - 核验日期：2026-11-13；对象为本机安装的 `Probably Stolen_Data/Managed/Assembly-CSharp.dll`。
 - SHA-256：`725cb999d019dff1ff31bed353c7f9bb8d81a7605a15de1f80f5a3a6cf7b1d05`。
 - 使用任务指定的 ILSpy 11.2.0.10050 定向研究 UI、物品、容器和输入处理类型；没有全量导出工程，没有把反编译实现、游戏 DLL 或资源加入交付。
-- [适配器源码](../src/GameAdapter.cs) 对真实游戏程序集编译成功，`netstandard2.1`，0 warnings / 0 errors。0.1.1 已由 Lead 仅通过 MCP 验证主菜单观察、进入 InventoryScene、物品观察与储藏区 open；真实测试同时发现 inventory/像素按钮/窗口 X 漏报。本轮仅离线修复，未操作游戏、未安装或发布；修复仍待用户手动换版重启后通过 MCP 复验。详见 [实际 MCP 测试记录](LIVE-2026-11-13.md)。
+- [适配器源码](../src/GameAdapter.cs) 对真实游戏程序集编译成功，`netstandard2.1`，0 warnings / 0 errors。0.1.1真实MCP发现库存/窗口漏报后，0.1.2和0.1.3已逐项修复并实测库存、窗口、移动、买卖、关店和睡眠跨日。测试仅通过MCP控制游戏，没有公开发布；未测试项仍明确保留。详见 [实际 MCP 测试记录](LIVE-2026-11-13.md)。
 - 参考[官方模组指南](https://github.com/dragonpan2/probably-stolen-modding/blob/main/ModdingGuide.zh-CN.md)，实际 API 和副作用以本机 DLL 核验为准。
 
 编译命令（主工程由 Lead 维护，本人未改其源码/引用配置）：
@@ -77,9 +77,9 @@ mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是
 - `RenderHandler.RaycastElement<T>` 在 EventSystem 射线列表中找到首个 TreeNodeRender，并使用非泛型 `FindParentElement()` 的最近 element 再检查类型；它与 `RaycastFindParentElement<T>` 向上找目标类型的语义不同。本适配器维持最近 element 相同对象的判定，并比原生更保守：如果第一射线命中是普通 Graphic 等遮挡，不会跳过它去点后面的 TreeNode；不会把目标 inventory 的子物品命中当成空白区域。
 - **窗口 X 不是 SelectableElement**：`PixelWindow.topCloseButton` 是 element 为 null 的裸 TreeNodeRender，只有自己的原生 mouse 事件。现仅通过固定游戏字段 `ModReflect.Get<TreeNodeRender>(window, "topCloseButton")` 获取这个节点；要求窗口 IsVisible、该节点 active/合法且是第一命中，生成 `window_close`。click 严格分发其 pointer-enter/down/up/click/exit 事件，保留原生 ToFront、closeCallback、Hide 与音效顺序，不直接调用 Hide，不开放任意事件节点。
 - 世界 `Interactable` 使用实际 EventSystem 命中、可见 Renderer/摄像机前方、enabled/active、isAvailable/isPaused 过滤。click 走原生 pointer-enter/down/up/exit 路径，controlable 目标先按原选择流程清理旧选择；double_click 在真实选择路径后使用已核验的 `Interactable.OnDoubleClick`。`supported_actions` 只在 WorldEnabled 条件成立时提供：controlable 或有 IClickable 才列 click，有 IDoubleClickable 才列 double_click；执行前再次检查，不能用动作参数越过该表。动态 description 和动作表同时纳入 SemanticStamp，局面变化使旧句柄失效。
-- **睡袋漏报根因与修复（待运行复验）**：离线读取当前 level1 的 SleepingBag：SpriteRenderer 使用 `sleeping_bag`，sprite 为 960×540、PPU=100，即整场景大小 9.6×5.4；同对象 BoxCollider2D 的 offset 约 (4.004,-1.967)、size 约 (1.599,1.466)。原来的单 renderer.bounds.center 点不在睡袋点击区域，故即使存在 Renderer 仍漏报，不是长按接口问题（StoreBedroll 只有 IClickable）。现对最多16个同owner合法可见 Renderer、最多16个同owner enabled/active Collider2D，在其已有 bounds 采样5点；候选必须在 renderer XY 范围、摄像机前方、屏幕内，并由原 EventSystem 第一命中确认是同一 Interactable。保留 renderer中心作fallback，不调用 Physics2D.Raycast，不直接调用睡眠业务API，不接受任意坐标，也不放宽遮挡或隐藏对象。
+- **睡袋漏报根因与修复（已通过MCP复验）**：离线读取当前 level1 的 SleepingBag：SpriteRenderer 使用 `sleeping_bag`，sprite 为 960×540、PPU=100，即整场景大小 9.6×5.4；同对象 BoxCollider2D 的 offset 约 (4.004,-1.967)、size 约 (1.599,1.466)。原来的单 renderer.bounds.center 点不在睡袋点击区域，故即使存在 Renderer 仍漏报，不是长按接口问题（StoreBedroll 只有 IClickable）。现对最多16个同owner合法可见 Renderer、最多16个同owner enabled/active Collider2D，在其已有 bounds 采样5点；候选必须在 renderer XY 范围、摄像机前方、屏幕内，并由原 EventSystem 第一命中确认是同一 Interactable。保留 renderer中心作fallback，不调用 Physics2D.Raycast，不直接调用睡眠业务API，不接受任意坐标，也不放宽遮挡或隐藏对象。
 - **动态 world 提示的副作用核验**：仅在 InRun/PlayerStore.HasInstance 就绪后，对运行时类型精确等于 `StoreShutterButton`、`StoreBedroll`、`StoreBell` 的原生组件调用其 IsTooltipEnabled/GetTooltip。前者只读店铺状态/锁标志和 CanEndDay；CanEndDay 遍历现有顾客的 dismissable 与当前顾客蓝图，GetClientBlueprint 仅返回既有字段。睡袋只读 storeState；铃铛只读锁、storeState、IsClientPresent/IsClientDimissable，后两者仅检查当前已有引用与 dismissable。调用只产生与玩家原生提示相同的本地化字符串，不暴露列表、隐藏顾客属性或条件内部细节。其他 TooltipInterface、Mod派生覆写、GameItem.GetTooltip 绝不调用；未知world description为空。
-- 定向核验了 `StoreShutterButton`、`StoreBedroll`、`StoreClientCounter`、`DialogUIManager` 等，原路径负责开/关店、睡眠确认和对话等游戏条件。没有直接开放 OpenShutter、奖励/造物、跳日、改钱、剧情触发等业务捷径。**Lead 已通过真实0.1.2 MCP实测储藏窗口开关、物品移动往返、开店、铃铛叫客、购入汽水15（550→535）、卖出17（→552），并在顾客队列清空后关店。睡袋句柄尚未出现，故睡眠与完整跨日闭环仍未验收；本轮world提示和几何采样修复待换版复验。**
+- 定向核验了 `StoreShutterButton`、`StoreBedroll`、`StoreClientCounter`、`DialogUIManager` 等，原路径负责开/关店、睡眠确认和对话等游戏条件。没有直接开放 OpenShutter、奖励/造物、跳日、改钱、剧情触发等业务捷径。**已通过真实0.1.2 MCP实测储藏窗口开关、物品移动往返、开店、叫客、购入汽水15（550→535）、卖出17（→552）及关店；0.1.3另一轮载入后通过MCP完成睡袋交互、原生夜间确认（电费5）、保存提示、夜间报告及第2天545信用点。基础流程已验收，不把两轮资金拼接或宣称全部玩法通过。**
 - 若当前场景没有配置可用的世界 EventSystem raycaster，world 条目不会出现；不通过额外物理射线/任意方法调用绕过。
 
 ### 输入校验
@@ -107,4 +107,4 @@ mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是
 4. 没有显式物品目标使用/消费、液体倾倒、装备后目标点击、旋转/翻转、自动堆叠、递归容器搜索/自动摆放、卸载机器、context-menu 任意函数或全局按键工具。只开放可独立完成的 open/examine/activate/toggle。
 5. move 只支持当前可见 inventory 的空白 drop；满容器、采样点全部被挡的容器、drop 在其他 item 上的堆叠/容器插入不暴露。原生坐标放置不适用的特殊容器允许返回规则拒绝。
 6. 文本可见性依据原生渲染/canvas/cull/alpha/屏幕位置与射线遮挡，几何取样有意保守；未支持世界相机移动、拖动窗口、复杂 IMGUI、任意事件接口或特殊手绘 UI。
-7. 0.1.1 有限 MCP 实测发现漏报；0.1.2 已由Lead通过MCP复验窗口开关、库存移动、叫客、一次买卖及关店，睡袋单点采样漏报仍阻断睡眠。本轮world description/动作表/睡袋候选采样尚待换版重启后的 MCP 复验，完整跨日循环仍未验收；还需验证 modal 遮挡、旧 snapshot、切场景、密码/配置/控制台屏蔽、非法/部分输入、物品所有权/锁/模块以及满库存/部分转移。不得把真实 DLL 编译或离线纯 helper/源码回归检查称为这些验收已通过。
+7. 0.1.1 MCP实测发现漏报，0.1.2通过窗口开关、库存移动、叫客、一次买卖及关店复验；0.1.3已通过world提示/睡袋交互、夜间结算及次日状态复验。仍需验证真实输入validator、复杂modal/切场景、密码/配置/控制台屏蔽的完整覆盖、物品所有权/锁/模块与满库存/部分转移、退出重启再读档。不得把基础闭环、真实DLL编译或离线纯helper/源码回归检查称为所有功能均验收。
