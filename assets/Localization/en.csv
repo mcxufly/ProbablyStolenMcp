@@ -1,5 +1,7 @@
 enabled,Enable local Agent control
 enabled_help,Allows authenticated local MCP clients to operate native game controls. Actions can permanently affect your save. Default: off. Apply to restart the listener.
 port,Local TCP port (127.0.0.1 only)
+port_help,Type an integer from 1024 to 65535. Default: 17653. Takes effect on Apply. Invalid input restores the last valid port. Set PS_MCP_PORT in the MCP client to the same value.
+port_invalid,Port must be an integer from 1024 to 65535. The last valid port was retained.
 token,Private access token
 token_help,Use 32-128 ASCII letters/digits/-/_. Generate privately and set the same PS_MCP_TOKEN for your MCP client. Never share it with an Agent prompt or publish it. Empty/invalid tokens disable the listener.

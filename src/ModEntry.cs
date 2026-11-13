@@ -10,6 +10,7 @@ namespace ProbablyStolenMcp
         ConfigEntry<bool> enabled;
         ConfigEntry<int> port;
         ConfigEntry<string> token;
+        int lastValidPort = 17653;
         GameObject host;
 
         public void Init(ModManifest manifest)
@@ -17,8 +18,24 @@ namespace ProbablyStolenMcp
             log = new ModLog(manifest);
             ModConfig config = ModHelper.GetConfig(Id);
             enabled = config.Define("enabled", false, "MCP", () => Text("enabled"), tooltip: () => Text("enabled_help"));
-            port = config.Define("port", 17653, "MCP", () => Text("port"), min: 1024, max: 65535);
+            // Native ranged numeric settings render as sliders. Keep this an integer
+            // without a UI range so ModConfigWindow uses its exact-value input field.
+            port = config.Define("port", 17653, "MCP", () => Text("port"), tooltip: () => Text("port_help"));
+            if (ValidPort(port.Value)) lastValidPort = port.Value;
+            else port.Set(lastValidPort); // Migrate invalid values from an existing config safely.
+            port.OnChanged += PortChanged;
             token = config.Define("token", "", "MCP", () => Text("token"), tooltip: () => Text("token_help"));
+        }
+
+        public static bool ValidPort(int value) => value >= 1024 && value <= 65535;
+
+        void PortChanged(int value)
+        {
+            if (ValidPort(value)) { lastValidPort = value; return; }
+            // The native Apply path writes BoxedValue back to the input after this
+            // callback, so both the saved setting and widget retain the last valid port.
+            port.Set(lastValidPort);
+            log.Warning(Text("port_invalid"));
         }
 
         static string Text(string key) => ModHelper.GetLocalized(Id, key);

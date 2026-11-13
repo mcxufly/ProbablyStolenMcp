@@ -1,4 +1,12 @@
-# 验证记录 — 0.1.0 开发预览版
+# 验证记录 — 0.1.1 开发预览版
+
+## 0.1.1 端口配置修复
+
+用户提供的游戏截图已确认 0.1.0 原生配置面板能显示，但端口被错误渲染为滑块；不据此扩大为游玩流程已验收。
+
+核对当前真实 `ModConfigWindow.BuildEntry/ReadWidget/Apply`：带 HasRange 的数字配置生成滑块，不带范围的 int 生成输入框，非整数输入返回 null 并回填旧值。现保留相同 int 类型和 `port` 键，移除 UI range，改在 OnChanged 校验 1024–65535，越界立即恢复上次有效值。原生 Apply 会在回调后把最终 BoxedValue 回填输入框；旧合法端口无须迁移。新增中英文范围/默认值/应用提示。更新到修复 DLL 后需要重启游戏。
+
+已新增端口控件定义回归检查、端口边界断言。尚未在运行游戏中复验修复后的输入框及错误回填；不把源码路径核验与自动测试当作截图实测。
 
 日期：2026-11-13（Asia/Shanghai）。本记录只报告实际完成的验证，不将模拟回调测试称为游戏内实测。
 
@@ -22,7 +30,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 `python3 -m unittest discover -s tests -p 'test_*.py' -v`
 
-**33 项通过**：27 项 MCP/网络测试 + 6 项清单、本地化、程序集引用、凭据示例、ZIP 布局与哈希测试。
+**34 项通过**：27 项 MCP/网络测试 + 7 项清单、本地化、端口控件定义、程序集引用、凭据示例、ZIP 布局与哈希测试。
 
 覆盖：三个协议版本与握手、六个工具、stdio 子进程、fake TCP 往返、工具 schema、未知字段、布尔非整数、有限坐标、Unicode、通知不执行动作、重复 JSON 键、非法 JSON、单行大小、分片、10 秒总 deadline 不随分片刷新、断连/超时不自动重试、backend 回显凭据的脱敏、示例不包含有效凭据、Mod 目录无脚本/游戏 DLL。
 
@@ -44,13 +52,13 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 ### 5. 内建扫描器
 
-使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **123 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
+使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **126 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
 
 离线运行不能由 `Application.dataPath` 初始化游戏程序集名缓存，所以外部扫描工具将当前真实 Managed 目录中存在的 DLL 名称传入 `allowedReferences`；没有随意豁免第三方引用。此工具只用于静态扫描，不修改游戏信任记录，不批准/启用 Mod，也不等于游戏菜单内审核或运行时验收。
 
 ### 6. 适配层参数验证
 
-外部 `AdapterValidation` 工具加载实际构建的 Mod DLL，**27 项断言通过**，对其纯参数辅助函数进行验证：分页范围/布尔类型、数值与下拉选项、未知字段、2048 Unicode 码点边界、避免截断 UTF-16 代理对。它不调用 Unity native，也不验证控件渲染或物品转移结果。
+外部 `AdapterValidation` 工具加载实际构建的 Mod DLL，**36 项断言通过**，对其纯参数辅助函数进行验证：分页范围/布尔类型、数值与下拉选项、未知字段、2048 Unicode 码点边界、避免截断 UTF-16 代理对。它不调用 Unity native，也不验证控件渲染或物品转移结果。
 
 ## 源码级核验，不等于运行时验证
 

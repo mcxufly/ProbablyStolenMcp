@@ -46,6 +46,12 @@ static class AdapterValidation
         Deny("RequiredString", Obj(encoded.Replace("\"}", "a\"}")), "value", 0, 2048);
         Deny("Fields", Obj("{\"unexpected\":1}"), new string[] { "limit" });
         Check(((string)Call("Clip", "a" + emoji + "z", 2)).Length != 2, "Clip does not leave an unpaired surrogate");
+        var mod = adapter.Assembly.GetType("ProbablyStolenMcp.ModEntry");
+        var validPort = mod.GetMethod("ValidPort", BindingFlags.Public | BindingFlags.Static);
+        foreach (int port in new[] { 1024, 17653, 65535 })
+            Check((bool)validPort.Invoke(null, new object[] { port }), "valid port accepted");
+        foreach (int port in new[] { int.MinValue, -1, 0, 1023, 65536, int.MaxValue })
+            Check(!(bool)validPort.Invoke(null, new object[] { port }), "invalid port rejected");
         Console.WriteLine($"PASS: {checks} built-adapter pure validation assertions (no Unity runtime exercised)");
     }
 }
