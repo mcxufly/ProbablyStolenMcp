@@ -28,6 +28,11 @@ namespace ProbablyStolenMcp
         private bool truncated;
         private readonly DialogueAdapter dialogue;
         private int dialogueScene = -1;
+        private GameItem observedEquipment;
+        private bool observedEquipped;
+        private int observedEquipmentCount;
+        private GameInventory observedEquipmentParent;
+        private ItemSelectHandler observedSelectionHandler;
 
         public GameAdapter()
         {
@@ -44,6 +49,9 @@ namespace ProbablyStolenMcp
             public Vector2 Point;
             public JObject Data;
             public string SemanticStamp;
+            public GameInventory ItemParent;
+            public int ItemCount;
+            public string ItemShapeStamp;
         }
 
         public void Reset()
@@ -51,6 +59,11 @@ namespace ProbablyStolenMcp
             snapshot = null;
             handles.Clear();
             entries.Clear();
+            observedEquipment = null;
+            observedEquipped = false;
+            observedEquipmentCount = 0;
+            observedEquipmentParent = null;
+            observedSelectionHandler = null;
             dialogue.InvalidateActions();
             if (dialogueScene != SceneManager.GetActiveScene().handle)
             {
@@ -104,6 +117,23 @@ namespace ProbablyStolenMcp
                     if (!new[] { "open", "examine", "activate", "toggle", "configure" }.Contains(itemAction))
                         throw new ArgumentException("unknown item action");
                     return Mutate(item, () => ItemAction(item, itemAction));
+                case "drop_item":
+                    Fields(arguments, "snapshot", "handle", "target", "amount");
+                    var dropSource = GetEntry(arguments);
+                    string dropTargetHandle = RequiredString(arguments, "target", 1, 128);
+                    if (!handles.TryGetValue(dropTargetHandle, out var dropTarget)) throw new InvalidOperationException("unknown target handle; observe again");
+                    int dropAmount = PageInt(arguments, "amount", 1, 1, int.MaxValue);
+                    JObject dropResult = null;
+                    JObject dropEnvelope = Mutate(dropSource, () =>
+                    {
+                        if (!IsLive(dropTarget) || !(dropSource.Native is GameItemElement sourceItem) || !(dropTarget.Native is GameItemElement targetItem))
+                            throw new InvalidOperationException("drop requires two currently visible item handles");
+                        dropResult = ItemDropAdapter.Drop(sourceItem, targetItem, dropAmount);
+                    });
+                    dropEnvelope.Merge(dropResult);
+                    return dropEnvelope;
+                case "equipment_action":
+                    return EquipmentAction(arguments);
                 case "move_item":
                     Fields(arguments, "snapshot", "handle", "target", "x", "y", "amount", "rotation", "flipped");
                     var source = GetEntry(arguments);
@@ -234,7 +264,17 @@ namespace ProbablyStolenMcp
             result["in_run"] = InRun();
             result["blocked_sensitive_screen"] = SensitiveScreen();
             result["snapshot_ttl_seconds"] = 30;
-            result["supported_operations"] = new JArray("observe", "ui_action", "ui_input", "inventory", "item_action", "move_item", "dialogue_history", "dialogue_status", "dialogue_action");
+            result["supported_operations"] = new JArray("observe", "ui_action", "ui_input", "inventory", "item_action", "move_item", "dialogue_history", "dialogue_status", "dialogue_action", "drop_item", "equipment_action");
+            var equipment = InRun() && !SensitiveScreen() ? EquipmentAdapter.Describe() : new JObject { ["available"] = false };
+            observedEquipment = InRun() && !SensitiveScreen() ? EquipmentAdapter.CurrentItem() : null;
+            observedEquipped = equipment.Value<bool?>("equipped") ?? false;
+            observedEquipmentCount = observedEquipment?.unitCount ?? 0;
+            observedEquipmentParent = observedEquipment?.parentInventory;
+            observedSelectionHandler = InRun() && !SensitiveScreen() ? ItemSelectHandler.current : null;
+            var equippedEntry = observedEquipment == null ? null : entries.FirstOrDefault(e => ReferenceEquals(e.Native, observedEquipment));
+            equipment["source_handle"] = equippedEntry?.Handle == null ? JValue.CreateNull() : new JValue(equippedEntry.Handle);
+            equipment["source_visible"] = equippedEntry != null;
+            result["equipment"] = equipment;
             return result;
         }
 
@@ -245,6 +285,12 @@ namespace ProbablyStolenMcp
             string handle = kind == "text" ? null : Guid.NewGuid().ToString("N");
             var entry = new Entry { Handle = handle, Kind = kind, Component = component, Native = native, Point = point, Label = label, Data = data };
             entry.SemanticStamp = SemanticStamp(entry);
+            if (native is GameItem item)
+            {
+                entry.ItemParent = item.parentInventory;
+                entry.ItemCount = item.unitCount;
+                entry.ItemShapeStamp = ItemTransform.Describe(item).ToString(Newtonsoft.Json.Formatting.None);
+            }
             entries.Add(entry);
             if (handle != null) handles.Add(handle, entry);
         }
@@ -289,6 +335,48 @@ namespace ProbablyStolenMcp
                 throw new InvalidOperationException("snapshot expired or unavailable; observe again");
         }
 
+        private JObject EquipmentAction(JObject args)
+        {
+            Fields(args, "snapshot", "action", "handle", "target");
+            CheckSnapshot(args);
+            string action = RequiredString(args, "action", 1, 32);
+            if (action != "equip" && action != "use" && action != "cancel") throw new ArgumentException("unknown equipment action");
+            if (action == "cancel" && (args["handle"] != null || args["target"] != null)) throw new ArgumentException("cancel does not accept item handles");
+            if (action == "equip" && args["target"] != null) throw new ArgumentException("equip does not accept a target");
+            Entry source = action == "cancel" ? null : GetEntry(args);
+            Entry target = null;
+            if (action == "use")
+            {
+                string targetHandle = RequiredString(args, "target", 1, 128);
+                if (!handles.TryGetValue(targetHandle, out target)) throw new InvalidOperationException("unknown target handle; observe again");
+            }
+            snapshot = null;
+            try
+            {
+                if (!InRun() || SensitiveScreen()) throw new InvalidOperationException("equipment is unavailable in the current screen");
+                var current = EquipmentAdapter.CurrentItem();
+                var state = EquipmentAdapter.Describe();
+                if (!ReferenceEquals(ItemSelectHandler.current, observedSelectionHandler) || !ReferenceEquals(current, observedEquipment) || (state.Value<bool?>("equipped") ?? false) != observedEquipped ||
+                    (current?.unitCount ?? 0) != observedEquipmentCount || !ReferenceEquals(current?.parentInventory, observedEquipmentParent))
+                    throw new InvalidOperationException("equipment state changed; observe again");
+                if (action == "cancel")
+                {
+                    if (current != null)
+                    {
+                        var selectedEntry = entries.FirstOrDefault(e => ReferenceEquals(e.Native, current));
+                        if (selectedEntry == null || !IsLive(selectedEntry))
+                            throw new InvalidOperationException("selected item is obscured; close the current modal before cancelling equipment");
+                    }
+                    return EquipmentAdapter.Cancel();
+                }
+                if (!(source.Native is GameItemElement item) || !IsLive(source)) throw new InvalidOperationException("equipment source must be a currently visible item");
+                if (action == "equip") return EquipmentAdapter.Equip(item);
+                if (!(target.Native is GameItemElement targetItem) || !IsLive(target)) throw new InvalidOperationException("use target must be a currently visible item");
+                return EquipmentAdapter.Use(item, targetItem);
+            }
+            finally { Reset(); }
+        }
+
         private JObject Mutate(Entry entry, Action action)
         {
             // Once a handle resolves, even failed live checks consume the snapshot.
@@ -309,7 +397,9 @@ namespace ProbablyStolenMcp
             if (e.Kind == "world") return WorldEnabled(e.Component as Interactable) && WorldHit(e.Component as Interactable, e.Point);
             if (e.Kind == "window_close" && (!(e.Native is PixelWindow window) || !window.IsVisible() ||
                 WindowCloseNode(window) != e.Component)) return false;
-            if (e.Native is GameItemElement item && (item.IsDestroyed() || item.isDebugMenu || GeneralHelper.IsDisplayOnly(item))) return false;
+            if (e.Native is GameItemElement item && (item.IsDestroyed() || item.isDebugMenu || GeneralHelper.IsDisplayOnly(item) ||
+                !ReferenceEquals(item.parentInventory, e.ItemParent) || item.unitCount != e.ItemCount ||
+                ItemTransform.Describe(item).ToString(Newtonsoft.Json.Formatting.None) != e.ItemShapeStamp)) return false;
             if (e.Native is SelectableElement pixel && (pixel.isHidden || pixel.isDisabled || pixel.requiresHold ||
                 SelectableElementHandler.current == null || !SelectableElementHandler.current.isActiveAndEnabled)) return false;
             if (e.Component is Selectable s && !s.IsInteractable()) return false;
@@ -511,6 +601,8 @@ namespace ProbablyStolenMcp
             if (!IsLive(target) || !OnScreen(point) || !Hit(target.Component, inventory, point)) throw new InvalidOperationException("destination is no longer visible or point does not hit its empty inventory area");
             if (ItemPinHelper.BlocksClicks || ItemMouseDragHandler.current == null || !ItemMouseDragHandler.current.isActiveAndEnabled ||
                 ItemMouseDragHandler.current.IsDraggingItem) throw new InvalidOperationException("item movement is blocked");
+            if (ItemSelectHandler.current != null && EquipmentAdapter.CurrentItem() != null)
+                throw new InvalidOperationException("cancel the current item selection before moving items");
             if (item.parentInventory == null || !item.MayRemove() || amount > item.MaxNumRemove()) throw new InvalidOperationException("item removal is not allowed");
             if (!GeneralHelper.MayPlayerInsertInto(inventory)) throw new InvalidOperationException("destination ownership does not permit insertion");
             var shape = ItemTransform.BuildShape(item, rotation, flipped);

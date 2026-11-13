@@ -6,7 +6,7 @@ namespace ProbablyStolenMcp
     public sealed class ModEntry : IMod
     {
         public const string Id = "xufly_probably_stolen_mcp";
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
         ModLog log;
         ConfigEntry<bool> enabled;
         ConfigEntry<int> port;

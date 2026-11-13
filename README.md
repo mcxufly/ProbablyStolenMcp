@@ -1,8 +1,21 @@
 # Probably Stolen MCP / 深空当铺 Agent 接口
 
-**0.2.0，本地开发预览版。** 为《深空当铺：可能是偷的》（Steam App 4348910）提供可由大模型 Agent 调用的游戏观察与操作工具。使用游戏原生 Mod 加载器；Agent 调用标准 **MCP stdio**，由 Python 桥转发到游戏内的本机 TCP 服务。
+**0.3.0，本地开发预览版。** 为《深空当铺：可能是偷的》（Steam App 4348910）提供可由大模型 Agent 调用的游戏观察与操作工具。使用游戏原生 Mod 加载器；Agent 调用标准 **MCP stdio**，由 Python 桥转发到游戏内的本机 TCP 服务。
 
 > 自动测试不等于游戏实测。已通过真实 MCP 验证库存/窗口开关、物品移动往返、开店叫客、15买入17卖出及关店；0.1.3 又验证了睡袋、夜间服务结算和进入次日（第1天550→扣电费5→第2天545）。买卖与跨日分属换版前后的两次运行，不冒称同一笔利润跨重启保留。完整范围见 [MCP 实测记录](verification/LIVE-2026-11-13.md)。基础经营流程已跑通，但并不代表全部玩法或无人值守通关已支持。请使用备份/测试存档；原生操作会真实花钱、消耗物品并改变存档。
+
+## 0.3.0：拖放、装备与物品目标使用
+
+**新增接口尚待用户换版后通过MCP实测，不把编译、纯测试或旧版经营实测冒充本版验收。** 原有9个工具保留，现共11个。
+
+- `game_drop_item {snapshot,handle,target,amount?}`：把可见源物品拖放到可见目标物品；仅执行原生容器收纳与堆叠，不触发倒液、修复或目标使用。目标容器允许关闭但不可锁定，遵守有效所有权、源可移出量与目标容量；返回实际moved、partial、remaining_requested和route。此工具不接受坐标/旋转参数，显式落点和变换仍用game_move_item。
+- `game_equipment_action`：`equip` 持续装备，`use` 对已观察可见物品执行原生目标行为，`cancel` 清理装备或临时选择。所有动作都带普通 `snapshot`；装备后先重新observe取得新状态，不能拿旧句柄连续使用。
+- `game_observe.equipment` 返回selected/equipped/mode，以及仅在源可见时映射的source_handle；不泄露隐藏物品身份。快照绑定选择handler、物品引用、数量、父容器；可见物品句柄也检查数量/父容器/shape变化。
+- 目标使用只支持可见item；target==handle时只走原生允许的自激活，不是通用“吃掉”捷径。返回原生行为/物品动作是否分发，**不据performed推断已消费**。必须观察确认效果。
+- 取消也使用新鲜快照；若当前选中源被modal遮挡，先通过原生UI关闭modal再取消。装备光标的原生Graphic本身不参与raycast，不以跳过遮挡方式放行。
+- Move/Drop与装备目标使用分离：移动前须取消已有选择；不使用物理鼠标位置，不注入全局鼠标键盘，不提供任意回调。
+
+推荐流程：`observe → equipment_action(equip) → observe → equipment_action(use,target) → observe → equipment_action(cancel，如仍装备)`。可见容器拖放为 `observe → drop_item → observe`。详见 [装备与使用](verification/EQUIPMENT.md)、[拖放说明](verification/ITEM-DROP.md) 和 [0.3.0覆盖与验收](verification/FEATURES-0.3.0.md)。
 
 ## 0.2.0：原生录音机、对话控制与库存变换
 
@@ -51,7 +64,7 @@
 - 观察获得短期 `snapshot` 和不透明 `handle`；动作必须使用最近的快照，并再次检查可见性、可交互性和原生规则。尝试状态变更后需要重新观察。
 - 不是全知数据导出：不提供隐藏顾客属性、未来剧情、全局对象树、存档任意读写、生成物品或修改金钱。
 - 仅暴露已进入游戏后的交互；主菜单、新建/载入/删除存档和 Mod 信任/令牌设置由人类管理。开发工具不供 Agent 操作。
-- 这是语义/控件接口，不是屏幕视频、鼠标键盘注入或通用视觉 Agent。复杂的按住交互、目标使用、液体倾倒及特殊小游戏等可能仍需人类操作；详情见 [API 核验说明](verification/API-NOTES.md)。
+- 这是语义/控件接口，不是屏幕视频、鼠标键盘注入或通用视觉 Agent。复杂的按住交互、世界目标使用、完整液体化学及特殊小游戏等可能仍需人类操作；详情见 [API 核验说明](verification/API-NOTES.md)。
 
 ## MCP 工具
 
@@ -63,13 +76,15 @@
 | `game_inventory` | `snapshot`, `offset?`, `limit?` | 展开该快照已发现的可见物品/容器；不刷新 snapshot |
 | `game_item_action` | `snapshot`, `handle`, `action` | 原生 `open`、`examine`、`activate`、`toggle`、`configure`；不开放无法完整收尾的选择待用/指定作用目标流程 |
 | `game_move_item` | `snapshot`, `handle`, `target`, `x`, `y`, `amount?`, `rotation?`, `flipped?` | 原生移动与旋转/翻转，需当前可见容器空白落点，默认数量1 |
+| `game_drop_item` | `snapshot`, `handle`, `target`, `amount?` | 可见item到item的原生容器收纳或堆叠，不含use/倒液 |
+| `game_equipment_action` | `snapshot`, `action`, `handle?`, `target?` | equip需handle；use需已装备handle和目标item；cancel不传handle/target |
 | `game_dialogue_history` | `offset?`, `limit?`, `history_snapshot?` | 原生录音机最近最多100条；省略快照创建新副本，带快照稳定分页 |
 | `game_dialogue_status` | 无 | 当前店内可见台词/选项/typing及新的对话快照 |
 | `game_dialogue_action` | `dialogue_snapshot`, `action`, `choice_index?` | `advance` 不传选项索引；`choose` 必须传非负选项索引，只点当前可见可用选项 |
 
 MCP 握手支持 `2024-11-05`、`2025-03-26`、`2025-06-18`。只声明 tools 能力，不伪造 resources/prompts。2025-06-18 返回标准文本 content 和 structuredContent；旧协议保留文本 content。
 
-**坐标约定**：返回的 `screen.origin` 为 `bottom_left`，`x/y` 是 Unity 当前窗口像素坐标，左下角为 (0,0)，不是网页常见的左上角坐标。移动目标坐标必须落在当时可见且射线命中目标容器的空白区域；不支持自动寻找隐藏容器、递归收纳或向已有堆叠投放。0.2.0可在原生放置校验中显式指定旋转/翻转，不改变容量或形状规则。
+**坐标约定**：返回的 `screen.origin` 为 `bottom_left`，`x/y` 是 Unity 当前窗口像素坐标，左下角为 (0,0)，不是网页常见的左上角坐标。移动目标坐标必须落在当时可见且射线命中目标容器的空白区域；不能使用任意隐藏容器坐标；向可见物品收纳/堆叠用0.3.0新增game_drop_item，闭容器内寻找合法空位由原生mutation处理，不导出隐藏内容。0.2.0起可在原生放置校验中显式指定旋转/翻转，不改变容量或形状规则。
 
 **推荐循环**：`observe → 阅读局面 → 一次操作 → observe`。动画尚未结束时等待，不要不停重复点击。分页读取 observe 会生成新快照，旧页句柄随之失效；库存分页复用同一个 snapshot。`open`/`examine` 也会改变窗口状态，仍需重新观察。
 
@@ -144,6 +159,11 @@ DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
 python3 tests/cross_language.py
 DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
   dotnet run --project tests/DialogueAdapterTests.csproj -c Release
+DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
+  dotnet run --project tests/EquipmentTests.csproj -c Release
+DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
+  dotnet run --project tests/ItemDropTests.csproj -c Release -- \
+  '/path/to/Probably Stolen_Data/Managed'
 DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
   dotnet run --project tests/ItemTransformTests.csproj -c Release -- \
   '/path/to/Probably Stolen_Data/Managed'

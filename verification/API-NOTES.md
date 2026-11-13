@@ -1,6 +1,12 @@
 # GameAdapter：接口核验与边界
 
-## 0.2.0 扩展（待换版实测）
+## 0.3.0 拖放与装备使用（待换版实测）
+
+新增 `drop_item {snapshot,handle,target,amount?}` 仅容器/stack移动，以及 `equipment_action` 三分支equip/use/cancel（普通snapshot）；详见 [拖放](ITEM-DROP.md)、[装备使用](EQUIPMENT.md) 和 [本版覆盖](FEATURES-0.3.0.md)。主适配器所有路径均重新核对当前可见source/target；装备状态绑定当前handler/物品引用/equipped/count/parent，旧状态变化拒绝。cancel也需当前选中源可见；modal遮住时先关闭modal。
+
+observe追加equipment状态，source_handle仅当前源确实可见时返回；idle不会误映射无native的UI条目。所有item Entry新增parent/count/shape快照，变化后拒旧句柄。Drop不调用Target/倒液/修复链，装备use不直接改数量或onUsed。当前仅实现可见item目标，不支持泛世界/库存目标或自由鼠标轨迹。
+
+## 0.2.0 扩展（已部分MCP实测）
 
 新增 `dialogue_history` / `dialogue_status` / `dialogue_action`，使用原生录音机、独立history/dialogue快照及可见原生点击；详见 [对话专门说明](DIALOGUE.md)。普通observe/mutation使对话动作快照失效，但不丢弃同场景历史分页；场景变化清空两者，历史另核对PlayerStore身份。
 
@@ -8,7 +14,7 @@
 
 `item_action`新增configure：执行时MayConfigureSlotItem与CanConfigureSlotItem均须通过，后者按原生有效所有权判断，再ConfigureSlotItem；不在observe执行May/Can，只根据现有CONFIGURE_TAG和委托提示候选。
 
-上述新增功能只有真实DLL构建、纯算法/协议测试和扫描证据，尚未在运行游戏中加载验收，不扩大旧版实测范围。
+0.2.0原生history/status/advance与变换往返已通过MCP真实验收，见 [本版实测](LIVE-0.2.0.md)；choose/configure仍待测。0.3.0新拖放/装备链目前只有真实DLL编译、纯测试/协议与扫描证据，不扩大旧版实测范围。
 
 ## 核验对象与证据
 
@@ -105,7 +111,7 @@ mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是
 - 核实 `TagSystem.IsTag` 为现有字典读取；用于 effective ownership/display-only 判断不会补建 tag。observe 不调用 `GetTagReadonly`、`GetUniqueID`、真实属性计算、onUsed、May/Can 委托或会排序真实容器的搜索方法。
 - open 使用 `ItemMouseDoubleClickHandler.OpenContentAction`，额外要求窗口未锁、item 有效归玩家拥有、输入 handler 可用；examine 使用其 OpenExamineAction。
 - activate/toggle 分别要求原生 May 与 Can 为真，再调用 `ActivateSlotItem` / `ToggleSlotItem`。尊重原生允许的非拥有 document 交互，不强行统一改成所有物品都可用或都不可用。
-- 核实原生 `TrySelectItem` 只开启待用选择，目标点击另由输入轮询处理，不能独立完成消费。因此初版明确**不开放 use/指定目标消费**，避免 Agent 进入无法完成或取消的选择态。
+- 原生 `TrySelectItem` 仅临时选择，旧版未把它包装成已消费；0.3.0新增独立equipment_action，用TryEquipItem进入持续装备、原生item目标管线执行、ContinueEquipAfterUse决定保持/退出、Cancel/EndSelect清理。只支持已装备源和可见item目标，未实测时不声称所有物品均能消费。
 - move 先验证源仍可见、目标仍可见且指定点第一命中为该 inventory 空白；再检查 handler/pin/drag 锁、源 `MayRemove()` 与 `MaxNumRemove()`、目标 `GeneralHelper.MayPlayerInsertInto`。`MayRemove` 包含源容器移除锁和祖先非拥有容器限制。
 - 以新的 `GridShapeBuilder(item.modifiedShape)` 调用 `TryInventorySlot`，要求 `numTransfer > 0`，再 `TryAcceptOnce(amount)`。由原生 slot 路径处理数量、形状、接收谓词、状态/模块规则、父节点和 add/remove 事件；不调用 UncheckedAccept/AcceptUnchecked、不先手工从源删除。
 
@@ -114,7 +120,7 @@ mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是
 1. **主菜单无动作**：in_run 需要 `PlayerStore.HasInstance`（不会创建实例）、同一 active loaded scene 上启用的 StoreUIManager/EmporiumEntry、已存在玩家库存和 UI/EventSystem。主菜单可返回非敏感可见文本，但不发 action handles；请由人类先载入测试存档。没有调用会惰性 new PlayerStore 的 `PlayerStore.Instance`。
 2. 排除 Mod 配置/信任/审批管理、token/password/bearer/api-key UI、F8 Quantum Console、F9/debug/spawner、主菜单和存档管理等已识别祖先/原生窗口。发现 Mod 管理或敏感原生窗口打开时，整个 observe 帧不输出 UI。通用确认框不能被拿来审批 Mod 信任。过滤有意保守，可能隐藏名称包含敏感关键词的合法游戏内容；这不是面向恶意第三方 Mod 的通用信息流沙箱。
 3. 所有 `requiresHold` 像素控件和通常的 `IHoldClickable` world 对象均不暴露；不伪造等待时长，也不调用最终回调绕过长按。唯一明确核验的例外是原生 `StoreBell`：其 `ShouldRequireHold()` 只读取 instantCallNextCustomer 与当前有无顾客，且世界前置检查已确认 `PlayerStore.HasInstance`。只有 IHoldClickable 对象恰好是该 StoreBell、EmporiumOption 已就绪、原生判断当前无需长按时才允许正常 click，执行前再次复查；当前需要长按时仍拒绝。不对任意第三方 IHoldClickable 调用其委托/方法来探测。
-4. 没有显式物品目标使用/消费、液体倾倒、装备后目标点击、自动堆叠、递归容器搜索/自动摆放、卸载机器、context-menu 任意函数或全局按键工具。已开放可独立完成的 open/examine/activate/toggle/configure，0.2.0的旋转/翻转通过原生放置路径实现，不是直接修改真实shape。
-5. move 只支持当前可见 inventory 的空白 drop；满容器、采样点全部被挡的容器、drop 在其他 item 上的堆叠/容器插入不暴露。原生坐标放置不适用的特殊容器允许返回规则拒绝。
+4. 0.3.0新增可见item对item的装备使用与容器/堆叠拖放，仍不支持世界/空白inventory装备目标、自由轨迹拖动、任意全局按键、精确定量液体/化学、多物品框选和全部特殊工具状态机。不提供任意context回调或直接消费捷径。
+5. move_item仍只接可见inventory空白落点；item目标收纳/堆叠使用独立drop_item，装备目标使用用equipment_action，避免三者语义混淆。特殊原生容器/道具可返回规则拒绝，不能用Unchecked强放。
 6. 文本可见性依据原生渲染/canvas/cull/alpha/屏幕位置与射线遮挡，几何取样有意保守；未支持世界相机移动、拖动窗口、复杂 IMGUI、任意事件接口或特殊手绘 UI。
 7. 0.1.1 MCP实测发现漏报，0.1.2通过窗口开关、库存移动、叫客、一次买卖及关店复验；0.1.3已通过world提示/睡袋交互、夜间结算及次日状态复验。仍需验证真实输入validator、复杂modal/切场景、密码/配置/控制台屏蔽的完整覆盖、物品所有权/锁/模块与满库存/部分转移、退出重启再读档。不得把基础闭环、真实DLL编译或离线纯helper/源码回归检查称为所有功能均验收。

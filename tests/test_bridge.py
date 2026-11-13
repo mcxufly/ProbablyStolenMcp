@@ -131,7 +131,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(process.stderr, b"")
         self.assertEqual(len(messages), 4)
         init = messages[0]["result"]
-        self.assertEqual(init["serverInfo"]["version"], "0.2.0")
+        self.assertEqual(init["serverInfo"]["version"], "0.3.0")
         self.assertEqual(set(init["capabilities"]), {"tools"})
         self.assertIn("untrusted", init["instructions"])
         self.assertIn("saved progress", init["instructions"])
@@ -513,7 +513,7 @@ class BridgeTests(unittest.TestCase):
         bridge.call.return_value = {}
         instance = self.ready(bridge)
         tools = {tool["name"]: tool for tool in instance.handle(request("tools/list"))["result"]["tools"]}
-        self.assertEqual(len(tools), 9)
+        self.assertEqual(len(tools), 11)
         self.assertTrue(tools["game_dialogue_history"]["annotations"]["readOnlyHint"])
         self.assertTrue(tools["game_dialogue_status"]["annotations"]["readOnlyHint"])
         self.assertFalse(tools["game_dialogue_action"]["annotations"]["readOnlyHint"])
@@ -545,6 +545,122 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"]["code"], "timeout")
         connection.connect.assert_called_once()
+
+    def test_drop_item_schema_requires_observed_handles_without_coordinate_or_use_shortcuts(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        instance = self.ready(bridge)
+        drop = {"snapshot": "observe-only", "handle": "source-item", "target": "target-item"}
+        invalid = [
+            {key: value for key, value in drop.items() if key != required}
+            for required in ("snapshot", "handle", "target")
+        ]
+        invalid.extend({**drop, key: value} for key, value in (
+            ("snapshot", ""), ("snapshot", "s" * 129), ("handle", True), ("target", ""),
+            ("amount", True), ("amount", 1.0), ("amount", 0), ("amount", -1),
+            ("amount", 2147483648), ("amount", "1"), ("x", 10), ("y", 20),
+            ("rotation", 90), ("flipped", True), ("action", "use"),
+            ("dialogue_snapshot", "d"), ("history_snapshot", "h")))
+        for arguments in invalid:
+            with self.subTest(arguments=arguments):
+                self.assertEqual(instance.handle(call("game_drop_item", arguments))["error"]["code"], -32602)
+        bridge.call.assert_not_called()
+        for arguments in (drop, {**drop, "amount": 1}, {**drop, "amount": 2147483647}):
+            self.assertFalse(instance.handle(call("game_drop_item", arguments))["result"]["isError"])
+            bridge.call.assert_called_with("drop_item", arguments)
+
+    def test_equipment_action_schema_exact_mutation_shapes(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        instance = self.ready(bridge)
+        equip = {"snapshot": "fresh", "action": "equip", "handle": "source"}
+        use = {"snapshot": "fresh", "action": "use", "handle": "source", "target": "target"}
+        cancel = {"snapshot": "fresh", "action": "cancel"}
+        invalid = [
+            {}, {"action": "cancel"}, {"snapshot": "fresh"},
+            {**equip, "target": "target"}, {**equip, "handle": ""},
+            {key: value for key, value in equip.items() if key != "handle"},
+            {key: value for key, value in use.items() if key != "target"},
+            {key: value for key, value in use.items() if key != "handle"},
+            {**use, "target": True}, {**use, "amount": 2}, {**use, "x": 1},
+            {**use, "rotation": 90}, {**cancel, "handle": "source"},
+            {**cancel, "target": "target"}, {**cancel, "action": "unequip"},
+            {**cancel, "action": True}, {**cancel, "snapshot": "s" * 129},
+            {"dialogue_snapshot": "d", "action": "cancel"},
+            {"history_snapshot": "h", "action": "cancel"},
+        ]
+        for arguments in invalid:
+            with self.subTest(arguments=arguments):
+                self.assertEqual(instance.handle(call("game_equipment_action", arguments))["error"]["code"], -32602)
+        bridge.call.assert_not_called()
+        for arguments in (equip, use, {**use, "target": "source"}, cancel):
+            self.assertFalse(instance.handle(call("game_equipment_action", arguments))["result"]["isError"])
+            bridge.call.assert_called_with("equipment_action", arguments)
+
+    def test_drop_and_equipment_tools_stdio_end_to_end_preserve_arguments(self):
+        arguments = [
+            ("game_drop_item", {"snapshot": "s1", "handle": "source", "target": "container"}),
+            ("game_drop_item", {"snapshot": "s2", "handle": "source", "target": "stack", "amount": 3}),
+            ("game_equipment_action", {"snapshot": "s3", "action": "equip", "handle": "tool"}),
+            ("game_equipment_action", {"snapshot": "s4", "action": "use", "handle": "tool", "target": "item"}),
+            ("game_equipment_action", {"snapshot": "s5", "action": "use", "handle": "tool", "target": "tool"}),
+            ("game_equipment_action", {"snapshot": "s6", "action": "cancel"}),
+        ]
+        with FakeTcp() as peer:
+            process, messages = self.stdio([initialization(), INITIALIZED] + [
+                call(name, value, request_id=index + 2) for index, (name, value) in enumerate(arguments)
+            ], peer.port)
+        self.assertEqual(process.returncode, 0)
+        self.assertTrue(all(not response["result"]["isError"] for response in messages[1:]))
+        self.assertEqual([item["operation"] for item in peer.requests],
+                         ["drop_item", "drop_item", "equipment_action", "equipment_action", "equipment_action", "equipment_action"])
+        self.assertEqual([item["arguments"] for item in peer.requests], [value for name, value in arguments])
+        self.assertEqual(len({item["request_id"] for item in peer.requests}), len(arguments))
+
+    def test_drop_and_equipment_mutation_metadata_notifications_and_old_protocols(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        for version in server.VERSIONS:
+            with self.subTest(version=version):
+                instance = self.ready(bridge, version)
+                tools = {tool["name"]: tool for tool in instance.handle(request("tools/list"))["result"]["tools"]}
+                for name in ("game_drop_item", "game_equipment_action"):
+                    if version == "2024-11-05":
+                        self.assertNotIn("annotations", tools[name])
+                    else:
+                        self.assertFalse(tools[name]["annotations"]["readOnlyHint"])
+                        self.assertTrue(tools[name]["annotations"]["destructiveHint"])
+                        self.assertFalse(tools[name]["annotations"]["idempotentHint"])
+                    notification = {key: value for key, value in call(name, {}).items() if key != "id"}
+                    self.assertIsNone(instance.handle(notification))
+        bridge.call.assert_not_called()
+        self.assertIn("Equipment", server.INSTRUCTIONS)
+        self.assertIn("modal", server.INSTRUCTIONS)
+
+    def test_equipment_and_drop_failures_never_retry_or_leak_token(self):
+        arguments = [
+            ("game_drop_item", {"snapshot": "fresh", "handle": "source", "target": "container"}),
+            ("game_equipment_action", {"snapshot": "fresh", "action": "use", "handle": "source", "target": "target"}),
+            ("game_equipment_action", {"snapshot": "fresh", "action": "cancel"}),
+        ]
+        for name, args in arguments:
+            with self.subTest(name=name, action=args.get("action")):
+                def failed(connection, message):
+                    connection.sendall(server.encode_json({"ok": False, "error": {
+                        "code": "unavailable", "message": "blocked " + self.token}}) + b"\n")
+                with FakeTcp(failed) as peer:
+                    result = self.ready(server.TcpBridge(self.token, peer.port)).handle(call(name, args))["result"]
+                self.assertTrue(result["isError"])
+                self.assertNotIn(self.token, json.dumps(result))
+                self.assertEqual(len(peer.requests), 1)
+                connection = mock.MagicMock()
+                connection.__enter__.return_value = connection
+                connection.connect.side_effect = TimeoutError()
+                with mock.patch.object(server.socket, "socket", return_value=connection):
+                    result = self.ready(server.TcpBridge(self.token)).handle(call(name, args))["result"]
+                self.assertTrue(result["isError"])
+                self.assertEqual(result["structuredContent"]["error"]["code"], "timeout")
+                connection.connect.assert_called_once()
 
     def test_long_unicode_input_fits_tcp_request_limit(self):
         arguments = {"snapshot": "s", "handle": "h", "value": "\U0001f680" * 2048}

@@ -32,7 +32,13 @@ INSTRUCTIONS = (
     "Dialogue history uses the game's native recorder, with its own history_snapshot "
     "for paging. Get game_dialogue_status before each dialogue action and use its "
     "dialogue_snapshot, never an observe or history snapshot. Dialogue actions may "
-    "advance story or select consequential choices; do not retry them."
+    "advance story or select consequential choices; do not retry them. "
+    "Equipment and item-drop mutations use the current game_observe snapshot. "
+    "Equip only observed items; use requires the observed source to be the "
+    "currently equipped item and an observed item target. The same source/target "
+    "requests native self-use. Cancel also requires a fresh observe snapshot and "
+    "does not bypass modal or native equipment rules. Drop is stack/container "
+    "placement, not target-use or liquid transfer."
 )
 
 
@@ -120,6 +126,55 @@ TOOLS = [
                         "idempotentHint": False, "openWorldHint": False},
     },
     {
+        "name": "game_drop_item",
+        "description": "Drop one observed item onto another observed item for native "
+                       "stacking or container placement. Use the current game_observe "
+                       "snapshot and item handles; amount defaults to 1. The mod checks "
+                       "the observed target point with a live raycast. This is not "
+                       "target-use, repair, or liquid transfer. Do not pass coordinates "
+                       "or transforms; use game_move_item for explicit grid transforms. "
+                       "May change saved progress; never retry blindly.",
+        "inputSchema": object_schema({
+            "snapshot": HANDLE, "handle": HANDLE, "target": HANDLE,
+            "amount": {"type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1},
+        }, ("snapshot", "handle", "target")),
+        "annotations": {"readOnlyHint": False, "destructiveHint": True,
+                        "idempotentHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "game_equipment_action",
+        "description": "Equip an observed item, use the currently equipped observed "
+                       "item on an observed item target, or cancel native equipment "
+                       "selection. Get a fresh game_observe snapshot before each attempt. "
+                       "Use requires the source handle to match current equipment; "
+                       "target equal to source requests native self-use. World/inventory "
+                       "targets are not supported. Cancel still requires the current "
+                       "snapshot and cannot bypass modal/native rules. Actions may "
+                       "consume items or change saved progress; never retry blindly.",
+        "inputSchema": {
+            **object_schema({
+                "snapshot": HANDLE,
+                "action": {"type": "string", "enum": ["equip", "use", "cancel"]},
+                "handle": HANDLE, "target": HANDLE,
+            }, ("snapshot", "action")),
+            "oneOf": [
+                object_schema({
+                    "snapshot": HANDLE, "action": {"type": "string", "const": "equip"},
+                    "handle": HANDLE,
+                }, ("snapshot", "action", "handle")),
+                object_schema({
+                    "snapshot": HANDLE, "action": {"type": "string", "const": "use"},
+                    "handle": HANDLE, "target": HANDLE,
+                }, ("snapshot", "action", "handle", "target")),
+                object_schema({
+                    "snapshot": HANDLE, "action": {"type": "string", "const": "cancel"},
+                }, ("snapshot", "action")),
+            ],
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True,
+                        "idempotentHint": False, "openWorldHint": False},
+    },
+    {
         "name": "game_dialogue_history",
         "description": "Read the game's native recorder history, not a new dialogue cache. "
                        "history_snapshot is separate from observe/dialogue snapshots. "
@@ -167,6 +222,7 @@ TOOLS = [
 OPERATIONS = {"game_observe": "observe", "game_ui_action": "ui_action",
               "game_ui_input": "ui_input", "game_inventory": "inventory",
               "game_item_action": "item_action", "game_move_item": "move_item",
+              "game_drop_item": "drop_item", "game_equipment_action": "equipment_action",
               "game_dialogue_history": "dialogue_history",
               "game_dialogue_status": "dialogue_status",
               "game_dialogue_action": "dialogue_action"}
@@ -411,7 +467,7 @@ class McpServer:
             self.version = requested if requested in VERSIONS else VERSIONS[-1]
             return {"protocolVersion": self.version,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.2.0"},
+                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.3.0"},
                     "instructions": INSTRUCTIONS}
         if not self.initialized:
             raise RpcFailure(-32002, "Complete initialize and notifications/initialized first")

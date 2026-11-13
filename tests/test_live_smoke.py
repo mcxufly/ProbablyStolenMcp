@@ -5,7 +5,7 @@ from live_smoke import inspect_game
 
 
 def observation(snapshot="fresh", **extra):
-    return {"snapshot": snapshot, "mod_version": "0.2.0", "in_run": True, "entries": [], **extra}
+    return {"snapshot": snapshot, "mod_version": "0.3.0", "in_run": True, "entries": [], **extra}
 
 
 class LiveSmokeTests(unittest.TestCase):

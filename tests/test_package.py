@@ -14,7 +14,7 @@ class PackageTests(unittest.TestCase):
     def test_manifest_is_explicit_and_least_privilege(self):
         root = ET.parse(ROOT / "assets/manifest.xml").getroot()
         self.assertEqual(root.findtext("ID"), "xufly_probably_stolen_mcp")
-        self.assertEqual(root.findtext("ModVersion"), "0.2.0")
+        self.assertEqual(root.findtext("ModVersion"), "0.3.0")
         self.assertEqual([x.text for x in root.find("Assemblies")], ["ProbablyStolenMcp.dll"])
         self.assertEqual([x.text for x in root.find("Capabilities")], ["network"])
         self.assertEqual([x.text for x in root.find("GameVersions")], ["0.46D"])
@@ -52,7 +52,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(ET.parse(ROOT / "ProbablyStolenMcp.csproj").getroot().findtext("PropertyGroup/Version"), version)
         source = (ROOT / "src/ModEntry.cs").read_text(encoding="utf-8")
         self.assertIn('public const string Version = "' + version + '"', source)
-        self.assertEqual(len(TOOLS), 9)
+        self.assertEqual(len(TOOLS), 11)
 
     def test_port_setting_uses_native_input_not_ranged_slider(self):
         source = (ROOT / "src/ModEntry.cs").read_text(encoding="utf-8")
@@ -76,9 +76,9 @@ class PackageTests(unittest.TestCase):
         self.assertEqual((mod / "ProbablyStolenMcp.dll").read_bytes(),
                          (ROOT / "bin/Release/netstandard2.1/ProbablyStolenMcp.dll").read_bytes())
 
-    @unittest.skipUnless((ROOT / "dist/ProbablyStolenMcp-0.2.0.zip").exists(), "Build release package first")
+    @unittest.skipUnless((ROOT / "dist/ProbablyStolenMcp-0.3.0.zip").exists(), "Build release package first")
     def test_archive_and_checksums(self):
-        with zipfile.ZipFile(ROOT / "dist/ProbablyStolenMcp-0.2.0.zip") as archive:
+        with zipfile.ZipFile(ROOT / "dist/ProbablyStolenMcp-0.3.0.zip") as archive:
             names = set(archive.namelist())
             self.assertEqual({name.removeprefix("Mods/ProbablyStolenMcp/") for name in names if name.startswith("Mods/")}, MOD_FILES)
             self.assertFalse(any(".inspect" in name or "Assembly-CSharp" in name or "__pycache__" in name for name in names))

@@ -36,7 +36,7 @@ def main():
         client.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         client.stdin.flush()
         tools = call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        assert len(tools["result"]["tools"]) == 9
+        assert len(tools["result"]["tools"]) == 11
         observed = call({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "game_observe", "arguments": {"limit": 2}}})
         result = observed["result"]
@@ -54,12 +54,16 @@ def main():
             (5, "game_dialogue_history", {"limit": 10}, "dialogue_history"),
             (6, "game_dialogue_status", {}, "dialogue_status"),
             (7, "game_dialogue_action", {"dialogue_snapshot": "fixture", "action": "choose", "choice_index": 1}, "dialogue_action"),
+            (8, "game_drop_item", {"snapshot": "fixture", "handle": "item", "target": "container", "amount": 2}, "drop_item"),
+            (9, "game_equipment_action", {"snapshot": "fixture", "action": "equip", "handle": "tool"}, "equipment_action"),
+            (10, "game_equipment_action", {"snapshot": "fixture", "action": "use", "handle": "tool", "target": "item"}, "equipment_action"),
+            (11, "game_equipment_action", {"snapshot": "fixture", "action": "cancel"}, "equipment_action"),
         ):
             reply = call({"jsonrpc": "2.0", "id": request_id, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
             assert reply["result"]["isError"] is False
             assert reply["result"]["structuredContent"]["operation"] == operation
             assert reply["result"]["structuredContent"]["echo"] == arguments
-        print("PASS: Python stdio MCP → real C# loopback → fake gameplay callback → MCP result (9 tools, dialogue and transforms)")
+        print("PASS: Python stdio MCP → real C# loopback → fake gameplay callback → MCP result (11 tools, dialogue transforms drop and equipment)")
     finally:
         for child in (client, fixture):
             if child:
