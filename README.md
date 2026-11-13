@@ -177,4 +177,4 @@ DOTNET_CLI_HOME="$PWD/.dotnet" NUGET_PACKAGES="$PWD/.nuget" \
 
 核对依据：[中文入门](https://github.com/dragonpan2/probably-stolen-modding/blob/main/README.zh-CN.md)、[完整指南](https://github.com/dragonpan2/probably-stolen-modding/blob/main/ModdingGuide.zh-CN.md)、[API 变更](https://github.com/dragonpan2/probably-stolen-modding/blob/main/APIChanges.zh-CN.md)、[社区政策](https://github.com/dragonpan2/probably-stolen-modding/blob/main/CodeOfConduct.zh-CN.md)。公开指南可能领先本机安装，以真实 DLL 为准。
 
-本项目没有上传 GitHub 或 Steam 创意工坊，也没有自动改动游戏安装目录。游戏与其资源权利归原作者所有。
+源码仓库：[mcxufly/ProbablyStolenMcp](https://github.com/mcxufly/ProbablyStolenMcp)。本项目未发布到 Steam 创意工坊，也没有自动改动游戏安装目录。游戏与其资源权利归原作者所有。
