@@ -3,7 +3,7 @@
   <ID>xufly_probably_stolen_mcp</ID>
   <Name>Agent MCP Bridge / Agent 游戏接口</Name>
   <Author>XuFly</Author>
-  <ModVersion>0.1.2</ModVersion>
+  <ModVersion>0.1.3</ModVersion>
   <Description>Authenticated localhost bridge for an external MCP agent. Disabled by default. Agent actions use native gameplay controls and can permanently affect your save; back up first. / 经过认证的本机 MCP 操作桥，默认关闭。Agent 操作可永久影响存档，请先备份。</Description>
   <GameVersions><Version>0.46D</Version></GameVersions>
   <Prerequisites />

@@ -1,4 +1,10 @@
-# 验证记录 — 0.1.2 开发预览版
+# 验证记录 — 0.1.3 开发预览版
+
+## 0.1.3：世界交互与睡袋采样
+
+0.1.2 MCP 已实测通过库存/原生关闭、开店、叫客、购买、出售、收货和关店。睡眠卡在没有睡袋句柄。离线核验当前原生场景：SleepingBag 用整场景透明 SpriteRenderer，但其 BoxCollider2D 在右下角偏移；旧 renderer 中心采样不在可点区域。修复为现有同 owner Collider2D bounds 有限样点，约束在可见 Renderer 范围、摄像机前方和屏幕内，最终仍使用原 EventSystem 第一命中，不直接调用睡眠业务函数。
+
+新增世界 description/supported_actions/interaction_effect，动态描述仅精确原生 Shutter/Bedroll/Bell 类型且 InRun/HasInstance。构建与源码回归不能证明睡袋已在游戏内修好；尚需更新重启并通过 MCP 复验睡眠和次日状态。
 
 ## 0.1.2：实测驱动的原生 UI 修复
 
@@ -36,7 +42,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 `python3 -m unittest discover -s tests -p 'test_*.py' -v`
 
-**41 项通过**：27 项 MCP/网络测试 + 6 项原生 UI 发现路径源码回归守卫 + 8 项清单、本地化、版本一致性、端口控件定义、程序集引用、凭据示例、ZIP 布局与哈希测试。原生 UI 源码守卫不替代运行时验收。
+**49 项通过**：27 项 MCP/网络测试 + 6 项只读实测预检工具测试 + 8 项原生 UI/世界发现路径源码回归守卫 + 8 项清单、本地化、版本一致性、端口控件定义、程序集引用、凭据示例、ZIP 布局与哈希测试。原生 UI 源码守卫不替代运行时验收。
 
 覆盖：三个协议版本与握手、六个工具、stdio 子进程、fake TCP 往返、工具 schema、未知字段、布尔非整数、有限坐标、Unicode、通知不执行动作、重复 JSON 键、非法 JSON、单行大小、分片、10 秒总 deadline 不随分片刷新、断连/超时不自动重试、backend 回显凭据的脱敏、示例不包含有效凭据、Mod 目录无脚本/游戏 DLL。
 
@@ -58,7 +64,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 ### 5. 内建扫描器
 
-使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **138 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
+使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **145 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
 
 离线运行不能由 `Application.dataPath` 初始化游戏程序集名缓存，所以外部扫描工具将当前真实 Managed 目录中存在的 DLL 名称传入 `allowedReferences`；没有随意豁免第三方引用。此工具只用于静态扫描，不修改游戏信任记录，不批准/启用 Mod，也不等于游戏菜单内审核或运行时验收。
 
@@ -74,7 +80,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 ## 已进行的 MCP 游戏内测试与剩余验收
 
-用户已自行安装并载入测试存档。0.1.1 通过 MCP 实际验证了握手、状态/物品读取与分页、错误令牌、旧快照、非法参数拒绝，以及打开储藏区；也发现原生 inventory/pixel_button 漏报导致后续操作受阻。完整证据范围见 [MCP 实测记录](LIVE-2026-11-13.md)。没有进行交易、消费、移动物品或日期推进，也没有公开发布。修复版需要用户手动换 DLL 并重启后才能继续实测。
+用户已自行安装并载入测试存档。0.1.1 的基础观察/拒绝测试后，用户换版到 0.1.2，已通过 MCP 实际完成储藏区开关、物品移出移回、开店叫客、汽水15买入17卖出、收货及关店，资金550→535→552。只读 smoke 检查实际通过。完整证据范围见 [MCP 实测记录](LIVE-2026-11-13.md)。仍未完成睡眠进入次日：睡袋世界句柄漏报，正在修复；没有公开发布。
 
 尚需在测试存档中验证：
 

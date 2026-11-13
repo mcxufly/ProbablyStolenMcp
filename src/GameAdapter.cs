@@ -182,7 +182,7 @@ namespace ProbablyStolenMcp
                 foreach (var world in Object.FindObjectsOfType<Interactable>().OrderBy(c => c.GetInstanceID()))
                 {
                     if (!WorldEnabled(world) || !TryWorldPoint(world, out var p)) continue;
-                    Add("world", world, null, p, Clip(world.gameObject.name, MaxText), new JObject { ["selectable"] = world.isControlable });
+                    Add("world", world, null, p, Clip(world.gameObject.name, MaxText), WorldData(world));
                 }
                 }
                 foreach (var text in Object.FindObjectsOfType<TMP_Text>().OrderBy(c => c.GetInstanceID()))
@@ -293,7 +293,12 @@ namespace ProbablyStolenMcp
             if (e.Native is GameItemElement item) return Clip(item.name ?? item.identifier, MaxText);
             if (e.Native is SelectableElement pixel) return PixelLabel(pixel);
             if (e.Native is GameInventory) return WindowTitle((TreeNodeRender)e.Component);
-            if (e.Kind == "world") return e.Component.gameObject.name + "|" + ((Interactable)e.Component).isControlable;
+            if (e.Kind == "world")
+            {
+                var world = (Interactable)e.Component;
+                return world.gameObject.name + "|" + world.isControlable + "|" + WorldDescription(world) + "|" +
+                    string.Join(",", WorldActions(world));
+            }
             string label = Label(e.Component);
             if (e.Component is TMP_InputField tmp) return label + "|" + tmp.text;
             if (e.Component is InputField input) return label + "|" + input.text;
@@ -321,8 +326,7 @@ namespace ProbablyStolenMcp
             if (e.Kind == "world")
             {
                 var world = (Interactable)e.Component;
-                if (action == "double_click" && !(world.GetComponent<IDoubleClickable>() is IDoubleClickable))
-                    throw new InvalidOperationException("world target has no double-click interaction");
+                if (!WorldActions(world).Contains(action)) throw new InvalidOperationException("world target does not currently support this action");
                 var data = Pointer(e.Point);
                 ExecuteEvents.Execute(world.gameObject, data, ExecuteEvents.pointerEnterHandler);
                 if (world.isControlable) Interactable.DeselectCurrents();
@@ -496,26 +500,89 @@ namespace ProbablyStolenMcp
             return ReferenceEquals(hold, bell) && EmporiumOption.Instance != null && !bell.ShouldRequireHold();
         }
 
+        private static JObject WorldData(Interactable world) => new JObject
+        {
+            // Keep label/technical_name stable for existing clients; description is the native localized hint.
+            ["technical_name"] = Clip(world.gameObject.name, MaxText),
+            ["description"] = WorldDescription(world),
+            ["supported_actions"] = new JArray(WorldActions(world)),
+            ["interaction_effect"] = world.isControlable ? "select" : "activate",
+            ["selectable"] = world.isControlable
+        };
+
+        private static string[] WorldActions(Interactable world)
+        {
+            if (!WorldEnabled(world)) return Array.Empty<string>();
+            var actions = new List<string>();
+            if (world.isControlable || world.GetComponent<IClickable>() != null) actions.Add("click");
+            if (world.GetComponent<IDoubleClickable>() != null) actions.Add("double_click");
+            return actions.ToArray();
+        }
+
+        private static string WorldDescription(Interactable world)
+        {
+            if (world == null || !InRun() || !PlayerStore.HasInstance) return "";
+            string description = "";
+            // Exact original types only: never dispatch a mod's override or an arbitrary TooltipInterface.
+            var shutter = world.GetComponent<StoreShutterButton>();
+            var bedroll = world.GetComponent<StoreBedroll>();
+            var bell = world.GetComponent<StoreBell>();
+            if (shutter != null && shutter.GetType() == typeof(StoreShutterButton) && shutter.IsTooltipEnabled())
+                description = shutter.GetTooltip();
+            else if (bedroll != null && bedroll.GetType() == typeof(StoreBedroll) && bedroll.IsTooltipEnabled())
+                description = bedroll.GetTooltip();
+            else if (bell != null && bell.GetType() == typeof(StoreBell) && bell.IsTooltipEnabled())
+                description = bell.GetTooltip();
+            return SensitiveWords(description) ? "" : Clip(description, MaxText);
+        }
+
         private static bool TryWorldPoint(Interactable world, out Vector2 point)
         {
             point = Vector2.zero;
             var camera = Camera.main;
             if (camera == null) return false;
-            var renderer = world.GetComponentInChildren<Renderer>();
-            if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy) return false;
-            Vector3 position = camera.WorldToScreenPoint(renderer.bounds.center);
-            point = position;
-            return position.z > camera.nearClipPlane && WorldHit(world, point);
+            // Some native props (notably SleepingBag) use a full-scene transparent sprite:
+            // its renderer center misses the offset click collider. Sample only this owner's
+            // actual collider bounds within a visible renderer, then use the normal EventSystem.
+            foreach (var renderer in world.GetComponentsInChildren<Renderer>().Take(16))
+            {
+                if (!VisibleWorldRenderer(world, renderer)) continue;
+                foreach (var collider in world.GetComponentsInChildren<Collider2D>().Take(16))
+                {
+                    if (!collider.isActiveAndEnabled || !Allowed(collider) || collider.GetComponentInParent<Interactable>() != world) continue;
+                    foreach (var fraction in PointFractions)
+                    {
+                        var bounds = collider.bounds;
+                        var candidate = new Vector3(Mathf.Lerp(bounds.min.x, bounds.max.x, fraction.x),
+                            Mathf.Lerp(bounds.min.y, bounds.max.y, fraction.y), renderer.bounds.center.z);
+                        if (!WithinRenderer(renderer, candidate)) continue;
+                        Vector3 projected = camera.WorldToScreenPoint(candidate);
+                        point = projected;
+                        if (projected.z > camera.nearClipPlane && WorldHit(world, point)) return true;
+                    }
+                }
+                Vector3 center = camera.WorldToScreenPoint(renderer.bounds.center);
+                point = center;
+                if (center.z > camera.nearClipPlane && WorldHit(world, point)) return true;
+            }
+            return false;
+        }
+
+        private static bool VisibleWorldRenderer(Interactable world, Renderer renderer) =>
+            renderer != null && renderer.enabled && Allowed(renderer) && renderer.GetComponentInParent<Interactable>() == world &&
+            (!(renderer is SpriteRenderer sprite) || sprite.color.a > .01f);
+
+        private static bool WithinRenderer(Renderer renderer, Vector3 point)
+        {
+            var bounds = renderer.bounds;
+            return point.x >= bounds.min.x && point.x <= bounds.max.x && point.y >= bounds.min.y && point.y <= bounds.max.y;
         }
 
         private static bool WorldHit(Interactable world, Vector2 point)
         {
             if (world == null || !OnScreen(point) || EventSystem.current == null || Camera.main == null) return false;
-            var renderer = world.GetComponentInChildren<Renderer>();
-            if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy ||
-                (renderer is SpriteRenderer sprite && sprite.color.a <= .01f)) return false;
-            Vector3 projected = Camera.main.WorldToScreenPoint(renderer.bounds.center);
-            if (projected.z <= Camera.main.nearClipPlane) return false;
+            if (!world.GetComponentsInChildren<Renderer>().Take(16).Any(renderer => VisibleWorldRenderer(world, renderer) &&
+                Camera.main.WorldToScreenPoint(renderer.bounds.center).z > Camera.main.nearClipPlane)) return false;
             var hits = Raycast(point);
             // Native EventSystem raycasters account for UI blockers and the actual collider hit order.
             if (hits.Count == 0) return false;

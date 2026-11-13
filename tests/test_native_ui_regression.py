@@ -48,8 +48,29 @@ class NativeUiRegressionTests(unittest.TestCase):
         self.assertIn('["short_description"]', SOURCE)
         self.assertIn('Clip(item.shortDescription, MaxText)', SOURCE)
         self.assertIn('Clip(item.flavorText, MaxText)', SOURCE)
-        self.assertNotIn('.GetTooltip(', SOURCE)
+        item_data = body('JObject ItemData(', 'private static JObject InventoryData(')
+        self.assertNotIn('.GetTooltip(', item_data)
         self.assertNotIn('.GetTagReadonly(', SOURCE)
+
+    def test_world_hints_use_exact_audited_native_types_only(self):
+        method = body('string WorldDescription(', 'private static bool TryWorldPoint(')
+        for native in ('StoreShutterButton', 'StoreBedroll', 'StoreBell'):
+            self.assertIn('GetType() == typeof(' + native + ')', method)
+        self.assertIn('!InRun() || !PlayerStore.HasInstance', method)
+        self.assertNotIn('GetComponent<TooltipInterface>', method)
+        self.assertNotIn('StoreDoor', method)
+        self.assertIn('["supported_actions"]', SOURCE)
+        self.assertIn('["interaction_effect"]', SOURCE)
+
+    def test_world_sample_uses_owned_collider_not_only_sprite_center(self):
+        method = body('bool TryWorldPoint(', 'private static TreeNodeRender WindowCloseNode(')
+        self.assertIn('GetComponentsInChildren<Collider2D>().Take(16)', method)
+        self.assertIn('collider.GetComponentInParent<Interactable>() != world', method)
+        self.assertIn('WithinRenderer(renderer, candidate)', method)
+        self.assertIn('WorldHit(world, point)', method)
+        self.assertIn('target.GetComponentInParent<Interactable>() == world', method)
+        self.assertNotIn('Physics2D.Raycast', method)
+        self.assertNotIn('Physics.Raycast', method)
 
     def test_inventory_supplies_verified_empty_drop_point(self):
         self.assertIn('["empty_drop_point"]', SOURCE)

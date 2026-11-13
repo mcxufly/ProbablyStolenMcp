@@ -4,6 +4,7 @@ Run from the project root: python3 tests/live_smoke.py
 Exit 0=basic checks passed, 1=failed, 2=needs human setup/restart. No mutations.
 """
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def inspect_game(tool):
+def inspect_game(tool, expected_version="0.1.3"):
     """Only two read-only tools are permitted, even if a future edit adds a call."""
     def read(name, args):
         if name not in ("game_observe", "game_inventory"):
@@ -22,8 +23,8 @@ def inspect_game(tool):
         return result
 
     old = read("game_observe", {"limit": 100})
-    if old.get("mod_version") != "0.1.2":
-        return 2, "Restart with Mod 0.1.2; frontend version alone is not evidence of the loaded DLL."
+    if old.get("mod_version") != expected_version:
+        return 2, f"Restart with Mod {expected_version}; frontend version alone is not evidence of the loaded DLL."
     if not old.get("in_run"):
         return 2, "A human must load the test save first."
     if old.get("blocked_sensitive_screen"):
@@ -43,7 +44,7 @@ def inspect_game(tool):
     if not all(e.get("empty_drop_point") for e in targets):
         raise ValueError("Inventory handle has no verified empty drop point")
     closes = sum(e.get("kind") == "window_close" for e in current.get("entries", []))
-    return 0, f"PASS: loaded DLL 0.1.2, fresh/stale snapshots, inventory reads; visible targets={len(targets)}, close handles={closes}. No gameplay action executed."
+    return 0, f"PASS: loaded DLL {expected_version}, fresh/stale snapshots, inventory reads; visible targets={len(targets)}, close handles={closes}. No gameplay action executed."
 
 
 def main():
@@ -73,7 +74,7 @@ def main():
             result = rpc("tools/call", {"name": name, "arguments": arguments})
             return result["structuredContent"]
 
-        code, summary = inspect_game(tool)
+        code, summary = inspect_game(tool, os.environ.get("PS_MCP_EXPECT_VERSION", "0.1.3"))
         print(summary)
         return code
     except (ValueError, KeyError, BrokenPipeError):

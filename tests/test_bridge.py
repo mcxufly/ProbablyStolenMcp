@@ -131,7 +131,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(process.stderr, b"")
         self.assertEqual(len(messages), 4)
         init = messages[0]["result"]
-        self.assertEqual(init["serverInfo"]["version"], "0.1.2")
+        self.assertEqual(init["serverInfo"]["version"], "0.1.3")
         self.assertEqual(set(init["capabilities"]), {"tools"})
         self.assertIn("untrusted", init["instructions"])
         self.assertIn("saved progress", init["instructions"])
