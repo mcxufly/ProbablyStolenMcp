@@ -45,7 +45,7 @@ JObject ItemTransform.Describe(GameInventory inventory);
 - 真实 Mod 项目 `dotnet build -c Release`：0警告、0错误。
 - `dotnet run --project tests/ItemTransformTests.csproj -c Release -- '<ManagedDir>'`：**46 项真实游戏纯 shape/copy/transform 断言通过**，覆盖8种方向/镜像组合、原形状不变、local cell不变、全局尺寸、独立省略参数、非法角度、被slot重写方向/镜像拒绝以及readonly描述。
 - 测试使用外部 .NET harness，不启动 Unity；未初始化的 GameItemElement 只设 modifiedShape 来调用 pure helper，不进入UI/库存/游戏生命周期。
-- **尚未游戏内实测旋转/镜像移动、部分堆叠拆分、设备形状修饰或存档重载**。真实 slot 调用顺序经离线核验，不把纯算法断言当成这些运行时验收。
+- **0.2.0已通过真实MCP验证牙膏旋转90度+镜像移动，从3×1变1×3，再恢复0度未镜像及原cell位置**；详见 [实测记录](LIVE-0.2.0.md)。部分堆叠拆分、特殊槽方向、设备形状修饰和存档重载仍未实测，不把此单一物品成功扩大为全部场景。
 
 ## 未实现
 

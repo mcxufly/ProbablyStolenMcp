@@ -71,4 +71,4 @@ advance禁止choice_index，choose必须是非负Int32整数；布尔/未知字�
 - 对当前真实游戏DLL编译，netstandard2.1，0警告/0错误。
 - `tests/DialogueAdapterTests.csproj`：独立net8工具验证原生历史副本投影、顺序、分页、分隔标记、4096scalar截断与UTF16修复。只调用纯helper，不触及Unity native或运行存档。
 - 额外引用游戏自带 `Febucci.TextAnimator.Runtime`（Private=false），读取typewriter状态，不捆绑该DLL。
-- 本次未操作运行游戏、未安装/发布；新history/status/advance/choose尚待Lead换版后通过MCP实测。历史只读、动作原生入口及schema测试不等同于全部剧情/电话对话验收。
+- 0.2.0换版后已经通过真实MCP验证：原生非空历史18条、分隔/稳定分页与录音机窗口对照、typing状态与typing时拒绝、原生advance确实推进下一句、已用/失效动作快照拒绝。详见 [实测记录](LIVE-0.2.0.md)。本轮无回复选项，choose仍待实测；电话/全部剧情/历史持久化仍不作保证。
