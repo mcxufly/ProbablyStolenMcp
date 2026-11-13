@@ -154,6 +154,11 @@ static class Tests
         Check(calls == 2, "disposed server does not execute");
         Check((bool)LargeResponse(BridgeProtocol.MaxResponseBytes)["ok"]!, "exact 1MiB response payload allowed excluding LF");
         Check(Code(LargeResponse(BridgeProtocol.MaxResponseBytes + 1)) == "response_too_large", "oversized response replaced by bounded error");
+        foreach (string operation in new[] { "dialogue_history", "dialogue_status", "dialogue_action" })
+        {
+            var allowed = new BridgeProtocol(Token, (op, input) => new JObject { ["operation"] = op });
+            Check((bool)allowed.Handle(Request(operation, operation))["ok"]!, "native dialogue operation explicitly allowed: " + operation);
+        }
         CheckRestartAfterSuccess();
         Console.WriteLine($"PASS: {assertions} transport/protocol assertions");
     }

@@ -131,7 +131,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(process.stderr, b"")
         self.assertEqual(len(messages), 4)
         init = messages[0]["result"]
-        self.assertEqual(init["serverInfo"]["version"], "0.1.3")
+        self.assertEqual(init["serverInfo"]["version"], "0.2.0")
         self.assertEqual(set(init["capabilities"]), {"tools"})
         self.assertIn("untrusted", init["instructions"])
         self.assertIn("saved progress", init["instructions"])
@@ -419,11 +419,132 @@ class BridgeTests(unittest.TestCase):
         valid = [call("game_inventory", {"snapshot": "s"}), call("game_move_item", move),
                  call("game_move_item", {**move, "x": -1.25, "amount": 2147483647})]
         valid.extend(call("game_item_action", {"snapshot": "s", "handle": "h", "action": action})
-                     for action in ("open", "examine", "activate", "toggle"))
+                     for action in ("open", "examine", "activate", "toggle", "configure"))
         valid.extend(call("game_ui_action", {"snapshot": "s", "handle": "h", "action": action})
                      for action in ("click", "double_click", "scroll_up", "scroll_down"))
         for message in valid:
             self.assertFalse(instance.handle(message)["result"]["isError"])
+
+    def test_move_rotation_and_flipped_schema_and_default_preservation(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        instance = self.ready(bridge)
+        move = {"snapshot": "s", "handle": "h", "target": "t", "x": 1.5, "y": 2}
+        for angle in (0, 90, 180, 270):
+            for flipped in (False, True):
+                arguments = {**move, "rotation": angle, "flipped": flipped}
+                self.assertFalse(instance.handle(call("game_move_item", arguments))["result"]["isError"])
+                bridge.call.assert_called_with("move_item", arguments)
+        self.assertFalse(instance.handle(call("game_move_item", move))["result"]["isError"])
+        bridge.call.assert_called_with("move_item", move)
+        bridge.reset_mock()
+        invalid = [("rotation", True), ("rotation", 90.0), ("rotation", "90"),
+                   ("rotation", -90), ("rotation", 360), ("rotation", 45),
+                   ("flipped", 0), ("flipped", "false"), ("flip", True)]
+        for key, value in invalid:
+            with self.subTest(key=key, value=value):
+                self.assertEqual(instance.handle(call("game_move_item", {**move, key: value}))["error"]["code"], -32602)
+        bridge.call.assert_not_called()
+
+    def test_dialogue_schema_separates_snapshots_and_rejects_invalid_shapes(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        instance = self.ready(bridge)
+        invalid = [
+            call("game_dialogue_status", {"snapshot": "s"}),
+            call("game_dialogue_status", {"unexpected": True}),
+            call("game_dialogue_history", {"snapshot": "s"}),
+            call("game_dialogue_history", {"history_snapshot": ""}),
+            call("game_dialogue_history", {"history_snapshot": "x" * 129}),
+            call("game_dialogue_history", {"offset": True}),
+            call("game_dialogue_history", {"offset": -1}),
+            call("game_dialogue_history", {"limit": 101}),
+            call("game_dialogue_action", {}),
+            call("game_dialogue_action", {"snapshot": "s", "action": "advance"}),
+            call("game_dialogue_action", {"history_snapshot": "s", "action": "advance"}),
+            call("game_dialogue_action", {"dialogue_snapshot": "", "action": "advance"}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "advance", "choice_index": 0}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "choose"}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "choose", "choice_index": True}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "choose", "choice_index": 1.0}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "choose", "choice_index": -1}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "choose", "choice_index": 2147483648}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "skip"}),
+            call("game_dialogue_action", {"dialogue_snapshot": "s", "action": "advance", "extra": "x"}),
+        ]
+        for message in invalid:
+            with self.subTest(message=message):
+                self.assertEqual(instance.handle(message)["error"]["code"], -32602)
+        bridge.call.assert_not_called()
+        valid = [
+            ("game_dialogue_history", {}),
+            ("game_dialogue_history", {"offset": 2147483647, "limit": 100, "history_snapshot": "h" * 128}),
+            ("game_dialogue_status", {}),
+            ("game_dialogue_action", {"dialogue_snapshot": "d" * 128, "action": "advance"}),
+            ("game_dialogue_action", {"dialogue_snapshot": "d", "action": "choose", "choice_index": 0}),
+            ("game_dialogue_action", {"dialogue_snapshot": "d", "action": "choose", "choice_index": 2147483647}),
+        ]
+        for name, arguments in valid:
+            self.assertFalse(instance.handle(call(name, arguments))["result"]["isError"])
+            bridge.call.assert_called_with(server.OPERATIONS[name], arguments)
+
+    def test_new_dialogue_tools_and_item_transform_end_to_end(self):
+        arguments = [
+            ("game_dialogue_history", {"offset": 0, "limit": 5}),
+            ("game_dialogue_history", {"history_snapshot": "recorder-page", "offset": 5, "limit": 5}),
+            ("game_dialogue_status", {}),
+            ("game_dialogue_action", {"dialogue_snapshot": "dialogue-only", "action": "advance"}),
+            ("game_dialogue_action", {"dialogue_snapshot": "new-dialogue-only", "action": "choose", "choice_index": 2}),
+            ("game_move_item", {"snapshot": "observe-only", "handle": "item", "target": "inventory", "x": 12, "y": 34, "rotation": 270, "flipped": True}),
+        ]
+        with FakeTcp() as peer:
+            process, messages = self.stdio([initialization(), INITIALIZED] + [
+                call(name, value, request_id=index + 2) for index, (name, value) in enumerate(arguments)
+            ], peer.port)
+        self.assertEqual(process.returncode, 0)
+        self.assertTrue(all(not response["result"]["isError"] for response in messages[1:]))
+        self.assertEqual([item["operation"] for item in peer.requests],
+                         ["dialogue_history", "dialogue_history", "dialogue_status", "dialogue_action", "dialogue_action", "move_item"])
+        self.assertEqual([item["arguments"] for item in peer.requests], [value for name, value in arguments])
+        self.assertEqual(len({item["request_id"] for item in peer.requests}), len(arguments))
+
+    def test_new_dialogue_tool_metadata_and_notification_safety(self):
+        bridge = mock.Mock()
+        bridge.call.return_value = {}
+        instance = self.ready(bridge)
+        tools = {tool["name"]: tool for tool in instance.handle(request("tools/list"))["result"]["tools"]}
+        self.assertEqual(len(tools), 9)
+        self.assertTrue(tools["game_dialogue_history"]["annotations"]["readOnlyHint"])
+        self.assertTrue(tools["game_dialogue_status"]["annotations"]["readOnlyHint"])
+        self.assertFalse(tools["game_dialogue_action"]["annotations"]["readOnlyHint"])
+        self.assertFalse(tools["game_dialogue_action"]["annotations"]["idempotentHint"])
+        for name in ("game_dialogue_history", "game_dialogue_status", "game_dialogue_action"):
+            notification = {key: value for key, value in call(name, {}).items() if key != "id"}
+            self.assertIsNone(instance.handle(notification))
+        bridge.call.assert_not_called()
+        self.assertIn("history_snapshot", server.INSTRUCTIONS)
+        self.assertIn("dialogue_snapshot", server.INSTRUCTIONS)
+
+    def test_dialogue_action_backend_failure_and_timeout_are_not_retried(self):
+        def failed(connection, message):
+            connection.sendall(server.encode_json({"ok": False, "error": {
+                "code": "unavailable", "message": "stale dialogue " + self.token}}) + b"\n")
+        with FakeTcp(failed) as peer:
+            result = self.ready(server.TcpBridge(self.token, peer.port)).handle(call("game_dialogue_action", {
+                "dialogue_snapshot": "stale", "action": "choose", "choice_index": 0}))["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "unavailable")
+        self.assertNotIn(self.token, json.dumps(result))
+        self.assertEqual(len(peer.requests), 1)
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        connection.connect.side_effect = TimeoutError()
+        with mock.patch.object(server.socket, "socket", return_value=connection):
+            result = self.ready(server.TcpBridge(self.token)).handle(call("game_dialogue_action", {
+                "dialogue_snapshot": "fresh", "action": "advance"}))["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "timeout")
+        connection.connect.assert_called_once()
 
     def test_long_unicode_input_fits_tcp_request_limit(self):
         arguments = {"snapshot": "s", "handle": "h", "value": "\U0001f680" * 2048}

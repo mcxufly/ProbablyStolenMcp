@@ -28,7 +28,11 @@ INSTRUCTIONS = (
     "or retry an action, including after timeout or disconnection: it may already "
     "have executed. Observe again to resolve uncertain outcomes. Each attempted "
     "mutation consumes its snapshot even on failure; observe again before the "
-    "next mutation. Inventory reads reuse the existing observation snapshot."
+    "next mutation. Inventory reads reuse the existing observation snapshot. "
+    "Dialogue history uses the game's native recorder, with its own history_snapshot "
+    "for paging. Get game_dialogue_status before each dialogue action and use its "
+    "dialogue_snapshot, never an observe or history snapshot. Dialogue actions may "
+    "advance story or select consequential choices; do not retry them."
 )
 
 
@@ -91,7 +95,7 @@ TOOLS = [
                        "even on failure; observe again and do not retry blindly.",
         "inputSchema": object_schema({
             "snapshot": HANDLE, "handle": HANDLE,
-            "action": {"type": "string", "enum": ["open", "examine", "activate", "toggle"]},
+            "action": {"type": "string", "enum": ["open", "examine", "activate", "toggle", "configure"]},
         }, ("snapshot", "handle", "action")),
         "annotations": {"readOnlyHint": False, "destructiveHint": True,
                         "idempotentHint": False, "openWorldHint": False},
@@ -100,20 +104,72 @@ TOOLS = [
         "name": "game_move_item",
         "description": "Move an observed item to an observed inventory handle at "
                        "viewport pixel x/y. Live raycast must hit that inventory. "
-                       "Amount defaults to 1. May change saved progress; attempt "
-                       "consumes the snapshot even on failure. Do not retry blindly.",
+                       "Amount defaults to 1. Optional rotation is an absolute "
+                       "counterclockwise angle (0/90/180/270 degrees); flipped is "
+                       "the absolute native local-X mirror flag. Omitted transform "
+                       "fields preserve current state. May change saved progress; "
+                       "attempt consumes the snapshot even on failure. Do not retry blindly.",
         "inputSchema": object_schema({
             "snapshot": HANDLE, "handle": HANDLE, "target": HANDLE,
             "x": {"type": "number"}, "y": {"type": "number"},
             "amount": {"type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1},
+            "rotation": {"type": "integer", "enum": [0, 90, 180, 270]},
+            "flipped": {"type": "boolean"},
         }, ("snapshot", "handle", "target", "x", "y")),
         "annotations": {"readOnlyHint": False, "destructiveHint": True,
                         "idempotentHint": False, "openWorldHint": False},
     },
+    {
+        "name": "game_dialogue_history",
+        "description": "Read the game's native recorder history, not a new dialogue cache. "
+                       "history_snapshot is separate from observe/dialogue snapshots. "
+                       "Omit it to create a read-only 30-second page session; reuse it "
+                       "for subsequent pages. Only already recorded dialogue is returned.",
+        "inputSchema": object_schema({"offset": OFFSET, "limit": LIMIT, "history_snapshot": HANDLE}),
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "game_dialogue_status",
+        "description": "Observe current in-store dialogue and get a dialogue_snapshot. "
+                       "Call before each dialogue action; never substitute observe or "
+                       "history snapshots. This adapter does not cover phone dialogue.",
+        "inputSchema": object_schema(),
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "game_dialogue_action",
+        "description": "Advance visible native dialogue or choose a visible enabled "
+                       "reply. Get game_dialogue_status first and use its dialogue_snapshot. "
+                       "advance forbids choice_index; choose requires it. Typing, "
+                       "hidden/modal and disabled targets are rejected. Story choices "
+                       "can change saved progress; never retry blindly.",
+        "inputSchema": {
+            **object_schema({
+                "dialogue_snapshot": HANDLE,
+                "action": {"type": "string", "enum": ["advance", "choose"]},
+                "choice_index": OFFSET,
+            }, ("dialogue_snapshot", "action")),
+            "oneOf": [
+                object_schema({
+                    "dialogue_snapshot": HANDLE,
+                    "action": {"type": "string", "const": "advance"},
+                }, ("dialogue_snapshot", "action")),
+                object_schema({
+                    "dialogue_snapshot": HANDLE,
+                    "action": {"type": "string", "const": "choose"},
+                    "choice_index": OFFSET,
+                }, ("dialogue_snapshot", "action", "choice_index")),
+            ],
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
+    },
 ]
 OPERATIONS = {"game_observe": "observe", "game_ui_action": "ui_action",
               "game_ui_input": "ui_input", "game_inventory": "inventory",
-              "game_item_action": "item_action", "game_move_item": "move_item"}
+              "game_item_action": "item_action", "game_move_item": "move_item",
+              "game_dialogue_history": "dialogue_history",
+              "game_dialogue_status": "dialogue_status",
+              "game_dialogue_action": "dialogue_action"}
 
 
 class ValidationError(ValueError):
@@ -122,11 +178,24 @@ class ValidationError(ValueError):
 
 def validate(value, schema, path="params"):
     """Validate exactly the JSON Schema subset used by the advertised inputs."""
+    if "oneOf" in schema:
+        matches = 0
+        for branch in schema["oneOf"]:
+            try:
+                validate(value, branch, path)
+                matches += 1
+            except ValidationError:
+                pass
+        if matches != 1:
+            raise ValidationError(path + " must match exactly one allowed argument shape")
+        return
     kind = schema["type"]
     types = {"object": (dict,), "string": (str,), "integer": (int,),
              "boolean": (bool,), "number": (int, float)}
     if type(value) not in types[kind]:  # bool must not satisfy integer/number.
         raise ValidationError(path + " must be " + kind)
+    if "const" in schema and value != schema["const"]:
+        raise ValidationError(path + " is not an allowed value")
     if "enum" in schema and value not in schema["enum"]:
         raise ValidationError(path + " is not an allowed value")
     if kind == "object":
@@ -342,7 +411,7 @@ class McpServer:
             self.version = requested if requested in VERSIONS else VERSIONS[-1]
             return {"protocolVersion": self.version,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.1.3"},
+                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.2.0"},
                     "instructions": INSTRUCTIONS}
         if not self.initialized:
             raise RpcFailure(-32002, "Complete initialize and notifications/initialized first")

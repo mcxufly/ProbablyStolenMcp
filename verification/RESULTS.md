@@ -1,4 +1,10 @@
-# 验证记录 — 0.1.3 开发预览版
+# 验证记录 — 0.2.0 开发预览版
+
+## 0.2.0：原生录音机与常用接口扩展
+
+新增原生history/status/action三工具（总9项），并扩展move旋转/翻转、可见布局信息和configure。历史直接读原生录音机队列，无新持久日志、无WebSocket；对话动作只点实际可见原生控件。完整边界与逐项证据见 [0.2.0覆盖矩阵](FEATURES-0.2.0.md)、[对话接口](DIALOGUE.md)、[变换说明](ITEM-TRANSFORM.md)。
+
+本版新增能力尚未在运行游戏中验收，需手动换版重启；旧版已经实测的买卖/跨日不自动覆盖新接口。本轮通过旧版MCP实际打开/关闭原生录音机，第2天该窗口没有显示历史台词；不承诺历史持久化。
 
 ## 0.1.3：世界交互与睡袋采样
 
@@ -42,7 +48,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 `python3 -m unittest discover -s tests -p 'test_*.py' -v`
 
-**49 项通过**：27 项 MCP/网络测试 + 6 项只读实测预检工具测试 + 8 项原生 UI/世界发现路径源码回归守卫 + 8 项清单、本地化、版本一致性、端口控件定义、程序集引用、凭据示例、ZIP 布局与哈希测试。原生 UI 源码守卫不替代运行时验收。
+**59 项通过**：32 项 MCP/网络测试 + 6 项只读预检工具测试 + 8 项原生 UI/世界发现路径源码守卫 + 5 项新功能集成守卫 + 8 项打包/版本/本地化检查。源码守卫不替代运行时验收。
 
 覆盖：三个协议版本与握手、六个工具、stdio 子进程、fake TCP 往返、工具 schema、未知字段、布尔非整数、有限坐标、Unicode、通知不执行动作、重复 JSON 键、非法 JSON、单行大小、分片、10 秒总 deadline 不随分片刷新、断连/超时不自动重试、backend 回显凭据的脱敏、示例不包含有效凭据、Mod 目录无脚本/游戏 DLL。
 
@@ -50,7 +56,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 `dotnet run --project tests/TransportTests.csproj -c Release`
 
-**32 项断言通过**。使用真实 TCP loopback，但游戏回调是纯模拟，不访问 Unity。
+**35 项断言通过**。使用真实 TCP loopback，但游戏回调是纯模拟，不访问 Unity。
 
 覆盖认证失败不执行、令牌范围、固定操作 allowlist、JSON 重复字段/额外 JSON、错误脱敏、不吐堆栈、近期 request_id 防重、分段行、非法多行/流水线、超长请求、幂等停机，以及正好 1 MiB 响应（不含 LF）与超限响应降级。正常调用发完响应后等待客户端先关闭，已验证成功调用后可立即重新绑定独占端口，避免常规配置更新被服务器主动关闭连接的 TIME_WAIT 阻塞。
 
@@ -60,17 +66,21 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 `python3 tests/cross_language.py`
 
-**通过**：真实 Python stdio MCP 子进程 → 当前 C# LoopbackServer → 模拟游戏回调 → 标准 MCP 结果。包含初始化、六项工具发现、observe、move_item 参数与返回、不泄露 token。临时子进程在 finally 中关闭。
+**通过**：真实 Python stdio MCP 子进程 → 当前 C# LoopbackServer → 模拟游戏回调 → 标准 MCP 结果。包含初始化、九项工具发现、observe、move变换、history/status/action参数与返回、不泄露 token。临时子进程在 finally 中关闭。
 
 ### 5. 内建扫描器
 
-使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **145 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
+使用当前游戏的真实 `ModScanner.Scan` 扫描干净发布 Mod 文件夹，`localFolder=false`，共扫描 **192 个方法**。检测能力仅 **network**，与清单一致，**Refused=false、Deprecated=false、Error=none**。
 
 离线运行不能由 `Application.dataPath` 初始化游戏程序集名缓存，所以外部扫描工具将当前真实 Managed 目录中存在的 DLL 名称传入 `allowedReferences`；没有随意豁免第三方引用。此工具只用于静态扫描，不修改游戏信任记录，不批准/启用 Mod，也不等于游戏菜单内审核或运行时验收。
 
 ### 6. 适配层参数验证
 
 外部 `AdapterValidation` 工具加载实际构建的 Mod DLL，**36 项断言通过**，对其纯参数辅助函数进行验证：分页范围/布尔类型、数值与下拉选项、未知字段、2048 Unicode 码点边界、避免截断 UTF-16 代理对。它不调用 Unity native，也不验证控件渲染或物品转移结果。
+
+### 7. 原生录音机与形状纯验证
+
+`DialogueAdapterTests.csproj` 8项历史投影断言通过；`ItemTransformTests.csproj` 46项真实native shape/copy/transform断言通过。均不触及运行中Unity，不等于对话继续/选择、旋转移动或配置窗口已实测。
 
 ## 源码级核验，不等于运行时验证
 
@@ -98,7 +108,7 @@ Mod 目标 `netstandard2.1`，仅编译 `src/**/*.cs`。直接引用本机游戏
 
 - 不支持按住交互、视觉视频/截图、全局鼠标键盘注入。
 - 不开放物品选择待用/指定作用目标的使用流程；原生 `TrySelectItem` 只会进入选择状态，尚不足以完整消费，因此没有把它伪装成 `use` API。
-- 移动物品只向当前可见容器空白位置放置；不自动堆叠、旋转、翻转或递归寻找空间。
+- 移动物品仍只向可见容器空白处放置，不自动堆叠或递归找空间；0.2.0已实现复制shape+原生slot提交的旋转翻转，但尚待真实移动与读档验收。
 - 主菜单/删除存档/Mod 安全配置由人类管理；调试控制台、刷钱/生成物品等不开放。
 - 同步 MCP stdio 一次处理一个请求；执行中不能即时响应 cancellation/ping，网络等待最多 10 秒。取消连接也不能撤销已经执行的原生动作。
 - 不承诺当前初版可无人值守游玩所有剧情、小游戏或通关；需要上述真实游戏反馈才能扩大验证范围。

@@ -1,5 +1,15 @@
 # GameAdapter：接口核验与边界
 
+## 0.2.0 扩展（待换版实测）
+
+新增 `dialogue_history` / `dialogue_status` / `dialogue_action`，使用原生录音机、独立history/dialogue快照及可见原生点击；详见 [对话专门说明](DIALOGUE.md)。普通observe/mutation使对话动作快照失效，但不丢弃同场景历史分页；场景变化清空两者，历史另核对PlayerStore身份。
+
+`move_item`增加可选 `rotation:0|90|180|270` / `flipped:bool`，绝对值、分别省略保持。由 [ItemTransform](../src/ItemTransform.cs) 复制shape，TryInventorySlot后ValidatePlacementTransform，最后TryAcceptOnce提交；详见 [变换核验](ITEM-TRANSFORM.md)。可见物品返回cell_x/cell_y/rotation/flipped/occupied宽高，库存增加identifier/insert_locked/remove_locked。
+
+`item_action`新增configure：执行时MayConfigureSlotItem与CanConfigureSlotItem均须通过，后者按原生有效所有权判断，再ConfigureSlotItem；不在observe执行May/Can，只根据现有CONFIGURE_TAG和委托提示候选。
+
+上述新增功能只有真实DLL构建、纯算法/协议测试和扫描证据，尚未在运行游戏中加载验收，不扩大旧版实测范围。
+
 ## 核验对象与证据
 
 - 核验日期：2026-11-13；对象为本机安装的 `Probably Stolen_Data/Managed/Assembly-CSharp.dll`。
@@ -14,7 +24,7 @@
 dotnet build ProbablyStolenMcp.csproj --no-restore -v minimal
 ```
 
-需要游戏自带的 `Assembly-CSharp`、`Newtonsoft.Json`、`UnityEngine.CoreModule`、`UnityEngine.UI`、`UnityEngine.UIModule`、`UnityEngine.IMGUIModule`、`UnityEngine.TextRenderingModule`、`Unity.TextMeshPro`。不随 Mod 分发这些 DLL。
+需要游戏自带的 `Assembly-CSharp`、`Newtonsoft.Json`、`UnityEngine.CoreModule`、`UnityEngine.UI`、`UnityEngine.UIModule`、`UnityEngine.IMGUIModule`、`UnityEngine.TextRenderingModule`、`Unity.TextMeshPro`、`UnityEngine.Physics2DModule`、`Febucci.TextAnimator.Runtime`。不随 Mod 分发这些 DLL。
 
 ## 公共入口与执行约束
 
@@ -45,8 +55,8 @@ namespace ProbablyStolenMcp
 | `inventory` | `{snapshot, offset?: integer >= 0, limit?: integer 1..100}` | 同一 observe 缓存中仍然可见的 item/inventory 分页；不遍历隐藏背包、不刷新 snapshot。默认同上。 |
 | `ui_action` | `{snapshot, handle, action?: "click"\|"double_click"\|"scroll_up"\|"scroll_down"}` | 默认 click；double_click 仅 world；scroll 仅 ScrollRect 或原生可滚动库存。 |
 | `ui_input` | `{snapshot, handle, value: string (0..2048)}` | 输入框逐字原生编辑；Toggle 精确字符串 `true`/`false`；Dropdown 为现有选项十进制 index；Slider 为 invariant-culture 有限数、位于原范围、满足 whole_numbers。 |
-| `item_action` | `{snapshot, handle, action: "open"\|"examine"\|"activate"\|"toggle"}` | 原生物品路径；不暴露不完整的选择待用/目标消费流程。 |
-| `move_item` | `{snapshot, handle, target, x: finite number, y: finite number, amount?: integer 1..2147483647}` | handle 为源 item，target 为可见 inventory；amount 默认 1；原生规则可能仅移动部分，返回实际 `moved`。 |
+| `item_action` | `{snapshot, handle, action: "open"\|"examine"\|"activate"\|"toggle"\|"configure"}` | 原生物品路径；不暴露不完整的选择待用/目标消费流程。 |
+| `move_item` | `{snapshot, handle, target, x: finite number, y: finite number, amount?: integer 1..2147483647, rotation?: 0|90|180|270, flipped?: boolean}` | handle 为源 item，target 为可见 inventory；amount 默认 1；原生规则可能仅移动部分，返回实际 `moved`。 |
 
 `offset` 上限为 Int32.MaxValue。`x/y` 为 viewport 像素，**左下角为原点**，不是浏览器常见左上角坐标；必须在当前屏幕内并实时射线命中目标容器的可见空白区域。不能凭这些参数点击/操作其他目标。
 
@@ -104,7 +114,7 @@ mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是
 1. **主菜单无动作**：in_run 需要 `PlayerStore.HasInstance`（不会创建实例）、同一 active loaded scene 上启用的 StoreUIManager/EmporiumEntry、已存在玩家库存和 UI/EventSystem。主菜单可返回非敏感可见文本，但不发 action handles；请由人类先载入测试存档。没有调用会惰性 new PlayerStore 的 `PlayerStore.Instance`。
 2. 排除 Mod 配置/信任/审批管理、token/password/bearer/api-key UI、F8 Quantum Console、F9/debug/spawner、主菜单和存档管理等已识别祖先/原生窗口。发现 Mod 管理或敏感原生窗口打开时，整个 observe 帧不输出 UI。通用确认框不能被拿来审批 Mod 信任。过滤有意保守，可能隐藏名称包含敏感关键词的合法游戏内容；这不是面向恶意第三方 Mod 的通用信息流沙箱。
 3. 所有 `requiresHold` 像素控件和通常的 `IHoldClickable` world 对象均不暴露；不伪造等待时长，也不调用最终回调绕过长按。唯一明确核验的例外是原生 `StoreBell`：其 `ShouldRequireHold()` 只读取 instantCallNextCustomer 与当前有无顾客，且世界前置检查已确认 `PlayerStore.HasInstance`。只有 IHoldClickable 对象恰好是该 StoreBell、EmporiumOption 已就绪、原生判断当前无需长按时才允许正常 click，执行前再次复查；当前需要长按时仍拒绝。不对任意第三方 IHoldClickable 调用其委托/方法来探测。
-4. 没有显式物品目标使用/消费、液体倾倒、装备后目标点击、旋转/翻转、自动堆叠、递归容器搜索/自动摆放、卸载机器、context-menu 任意函数或全局按键工具。只开放可独立完成的 open/examine/activate/toggle。
+4. 没有显式物品目标使用/消费、液体倾倒、装备后目标点击、自动堆叠、递归容器搜索/自动摆放、卸载机器、context-menu 任意函数或全局按键工具。已开放可独立完成的 open/examine/activate/toggle/configure，0.2.0的旋转/翻转通过原生放置路径实现，不是直接修改真实shape。
 5. move 只支持当前可见 inventory 的空白 drop；满容器、采样点全部被挡的容器、drop 在其他 item 上的堆叠/容器插入不暴露。原生坐标放置不适用的特殊容器允许返回规则拒绝。
 6. 文本可见性依据原生渲染/canvas/cull/alpha/屏幕位置与射线遮挡，几何取样有意保守；未支持世界相机移动、拖动窗口、复杂 IMGUI、任意事件接口或特殊手绘 UI。
 7. 0.1.1 MCP实测发现漏报，0.1.2通过窗口开关、库存移动、叫客、一次买卖及关店复验；0.1.3已通过world提示/睡袋交互、夜间结算及次日状态复验。仍需验证真实输入validator、复杂modal/切场景、密码/配置/控制台屏蔽的完整覆盖、物品所有权/锁/模块与满库存/部分转移、退出重启再读档。不得把基础闭环、真实DLL编译或离线纯helper/源码回归检查称为所有功能均验收。

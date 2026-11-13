@@ -52,7 +52,8 @@ namespace ProbablyStolenMcp
                 return Error("invalid_request", "Invalid request_id.");
             string operation = (string)request["operation"];
             if (operation != "observe" && operation != "ui_action" && operation != "ui_input" &&
-                operation != "inventory" && operation != "item_action" && operation != "move_item")
+                operation != "inventory" && operation != "item_action" && operation != "move_item" &&
+                operation != "dialogue_history" && operation != "dialogue_status" && operation != "dialogue_action")
                 return Error("unknown_operation", "Operation is not exposed.");
             if (!seen.Add(id)) return Error("duplicate_request", "Request already attempted; observe before making a new decision.");
             recent.Enqueue(id);

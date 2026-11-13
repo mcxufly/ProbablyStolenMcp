@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def inspect_game(tool, expected_version="0.1.3"):
+def inspect_game(tool, expected_version="0.2.0"):
     """Only two read-only tools are permitted, even if a future edit adds a call."""
     def read(name, args):
         if name not in ("game_observe", "game_inventory"):
@@ -74,7 +74,7 @@ def main():
             result = rpc("tools/call", {"name": name, "arguments": arguments})
             return result["structuredContent"]
 
-        code, summary = inspect_game(tool, os.environ.get("PS_MCP_EXPECT_VERSION", "0.1.3"))
+        code, summary = inspect_game(tool, os.environ.get("PS_MCP_EXPECT_VERSION", "0.2.0"))
         print(summary)
         return code
     except (ValueError, KeyError, BrokenPipeError):

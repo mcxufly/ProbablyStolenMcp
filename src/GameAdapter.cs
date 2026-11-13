@@ -26,6 +26,13 @@ namespace ProbablyStolenMcp
         private float observedAt;
         private int scene;
         private bool truncated;
+        private readonly DialogueAdapter dialogue;
+        private int dialogueScene = -1;
+
+        public GameAdapter()
+        {
+            dialogue = new DialogueAdapter(() => InRun() && !SensitiveScreen(), Allowed);
+        }
 
         private sealed class Entry
         {
@@ -44,6 +51,12 @@ namespace ProbablyStolenMcp
             snapshot = null;
             handles.Clear();
             entries.Clear();
+            dialogue.InvalidateActions();
+            if (dialogueScene != SceneManager.GetActiveScene().handle)
+            {
+                dialogue.Reset();
+                dialogueScene = SceneManager.GetActiveScene().handle;
+            }
         }
 
         public JObject Execute(string operation, JObject arguments)
@@ -51,6 +64,14 @@ namespace ProbablyStolenMcp
             if (arguments == null) throw new ArgumentException("arguments must be an object");
             switch (operation)
             {
+                case "dialogue_history":
+                    return dialogue.History(arguments);
+                case "dialogue_status":
+                    Fields(arguments);
+                    return dialogue.Observe();
+                case "dialogue_action":
+                    try { return dialogue.Act(RequiredString(arguments, "action", 1, 32), arguments); }
+                    finally { Reset(); }
                 case "observe":
                     Fields(arguments, "offset", "limit");
                     return Observe(PageInt(arguments, "offset", 0, 0, int.MaxValue), PageInt(arguments, "limit", 50, 1, 100));
@@ -80,19 +101,27 @@ namespace ProbablyStolenMcp
                     Fields(arguments, "snapshot", "handle", "action");
                     var item = GetEntry(arguments);
                     string itemAction = RequiredString(arguments, "action", 1, 32);
-                    if (!new[] { "open", "examine", "activate", "toggle" }.Contains(itemAction))
+                    if (!new[] { "open", "examine", "activate", "toggle", "configure" }.Contains(itemAction))
                         throw new ArgumentException("unknown item action");
                     return Mutate(item, () => ItemAction(item, itemAction));
                 case "move_item":
-                    Fields(arguments, "snapshot", "handle", "target", "x", "y", "amount");
+                    Fields(arguments, "snapshot", "handle", "target", "x", "y", "amount", "rotation", "flipped");
                     var source = GetEntry(arguments);
                     string targetHandle = RequiredString(arguments, "target", 1, 128);
                     if (!handles.TryGetValue(targetHandle, out var target)) throw new InvalidOperationException("unknown target handle; observe again");
                     float x = Number(arguments, "x");
                     float y = Number(arguments, "y");
                     int amount = PageInt(arguments, "amount", 1, 1, int.MaxValue);
+                    int? rotation = arguments["rotation"] == null ? (int?)null : PageInt(arguments, "rotation", 0, 0, 270);
+                    if (rotation.HasValue && rotation.Value % 90 != 0) throw new ArgumentException("rotation must be 0, 90, 180, or 270");
+                    bool? flipped = null;
+                    if (arguments["flipped"] != null)
+                    {
+                        if (arguments["flipped"].Type != JTokenType.Boolean) throw new ArgumentException("flipped must be a boolean");
+                        flipped = (bool)arguments["flipped"];
+                    }
                     int moved = 0;
-                    JObject moveResult = Mutate(source, () => moved = Move(source, target, new Vector2(x, y), amount));
+                    JObject moveResult = Mutate(source, () => moved = Move(source, target, new Vector2(x, y), amount, rotation, flipped));
                     moveResult["moved"] = moved;
                     return moveResult;
                 default: throw new ArgumentException("unsupported operation");
@@ -205,7 +234,7 @@ namespace ProbablyStolenMcp
             result["in_run"] = InRun();
             result["blocked_sensitive_screen"] = SensitiveScreen();
             result["snapshot_ttl_seconds"] = 30;
-            result["supported_operations"] = new JArray("observe", "ui_action", "ui_input", "inventory", "item_action", "move_item");
+            result["supported_operations"] = new JArray("observe", "ui_action", "ui_input", "inventory", "item_action", "move_item", "dialogue_history", "dialogue_status", "dialogue_action");
             return result;
         }
 
@@ -470,10 +499,13 @@ namespace ProbablyStolenMcp
                 case "toggle":
                     if (!item.MayToggleSlotItem() || !item.CanToggleSlotItem()) throw new InvalidOperationException("item cannot be toggled");
                     item.ToggleSlotItem(); return;
+                case "configure":
+                    if (!item.MayConfigureSlotItem() || !item.CanConfigureSlotItem()) throw new InvalidOperationException("item cannot be configured");
+                    item.ConfigureSlotItem(); return;
             }
         }
 
-        private int Move(Entry source, Entry target, Vector2 point, int amount)
+        private int Move(Entry source, Entry target, Vector2 point, int amount, int? rotation = null, bool? flipped = null)
         {
             if (!(source.Native is GameItemElement item) || !(target.Native is GameInventory inventory)) throw new ArgumentException("source must be item; target must be inventory");
             if (!IsLive(target) || !OnScreen(point) || !Hit(target.Component, inventory, point)) throw new InvalidOperationException("destination is no longer visible or point does not hit its empty inventory area");
@@ -481,9 +513,10 @@ namespace ProbablyStolenMcp
                 ItemMouseDragHandler.current.IsDraggingItem) throw new InvalidOperationException("item movement is blocked");
             if (item.parentInventory == null || !item.MayRemove() || amount > item.MaxNumRemove()) throw new InvalidOperationException("item removal is not allowed");
             if (!GeneralHelper.MayPlayerInsertInto(inventory)) throw new InvalidOperationException("destination ownership does not permit insertion");
-            var shape = new GridShapeBuilder(item.modifiedShape);
+            var shape = ItemTransform.BuildShape(item, rotation, flipped);
             var slot = inventory.TryInventorySlot(item, amount, point, shape, item.modifiedState);
             if (slot == null || slot.numTransfer < 1) throw new InvalidOperationException("native inventory placement rules reject this move");
+            ItemTransform.ValidatePlacementTransform(slot, rotation, flipped);
             int moved = slot.TryAcceptOnce(amount);
             if (moved < 1) throw new InvalidOperationException("native inventory move did not transfer an item");
             return moved;
@@ -759,7 +792,8 @@ namespace ProbablyStolenMcp
             if (item.examineWindow != null) actions.Add("examine");
             if (!item.forceDisableActivate && (item.onActivateSlotItemFunc != null || item.parentInventory?.onActivateSlotItemFunc != null)) actions.Add("activate");
             if (item.onToggleSlotItemFunc != null || item.parentInventory?.onToggleSlotItemFunc != null) actions.Add("toggle");
-            return new JObject
+            if (item.IsTag(GeneralHelper.CONFIGURE_TAG) && item.onConfigureSlotItemFunc != null) actions.Add("configure");
+            var data = new JObject
             {
                 ["count"] = item.unitCount, ["container"] = item.contentWindow != null, ["examinable"] = item.examineWindow != null,
                 ["owned"] = GeneralHelper.IsItemEffectivelyOwned(item), ["candidate_actions"] = actions,
@@ -768,6 +802,8 @@ namespace ProbablyStolenMcp
                 ["actions_checked_at_execution"] = true, ["inventory_label"] = Clip(WindowTitle(node), MaxText),
                 ["width_cells"] = item.modifiedShape?.width, ["height_cells"] = item.modifiedShape?.height
             };
+            data.Merge(ItemTransform.Describe(item));
+            return data;
         }
 
         private static JObject InventoryData(object native)
@@ -778,6 +814,11 @@ namespace ProbablyStolenMcp
                 data["width_cells"] = grid.inventoryShape.width; data["height_cells"] = grid.inventoryShape.height;
             }
             data["scrollable"] = native is GameGridScrollableInventory;
+            if (native is GameInventory inventory)
+            {
+                data.Merge(ItemTransform.Describe(inventory));
+                data["identifier"] = Clip(inventory.identifier, 128);
+            }
             return data;
         }
 

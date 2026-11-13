@@ -36,7 +36,7 @@ def main():
         client.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         client.stdin.flush()
         tools = call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        assert len(tools["result"]["tools"]) == 6
+        assert len(tools["result"]["tools"]) == 9
         observed = call({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "game_observe", "arguments": {"limit": 2}}})
         result = observed["result"]
@@ -45,10 +45,21 @@ def main():
         assert TOKEN not in json.dumps(observed)
         moved = call({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
             "name": "game_move_item", "arguments": {
-                "snapshot": "fixture", "handle": "item", "target": "inventory", "x": 1.25, "y": 4, "amount": 2}}})
+                "snapshot": "fixture", "handle": "item", "target": "inventory", "x": 1.25, "y": 4, "amount": 2, "rotation": 90, "flipped": True}}})
         assert moved["result"]["structuredContent"]["operation"] == "move_item"
         assert moved["result"]["structuredContent"]["echo"]["amount"] == 2
-        print("PASS: Python stdio MCP → real C# loopback → fake gameplay callback → MCP result (6 tools)")
+        assert moved["result"]["structuredContent"]["echo"]["rotation"] == 90
+        assert moved["result"]["structuredContent"]["echo"]["flipped"] is True
+        for request_id, name, arguments, operation in (
+            (5, "game_dialogue_history", {"limit": 10}, "dialogue_history"),
+            (6, "game_dialogue_status", {}, "dialogue_status"),
+            (7, "game_dialogue_action", {"dialogue_snapshot": "fixture", "action": "choose", "choice_index": 1}, "dialogue_action"),
+        ):
+            reply = call({"jsonrpc": "2.0", "id": request_id, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
+            assert reply["result"]["isError"] is False
+            assert reply["result"]["structuredContent"]["operation"] == operation
+            assert reply["result"]["structuredContent"]["echo"] == arguments
+        print("PASS: Python stdio MCP → real C# loopback → fake gameplay callback → MCP result (9 tools, dialogue and transforms)")
     finally:
         for child in (client, fixture):
             if child:
