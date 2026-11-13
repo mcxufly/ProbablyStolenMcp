@@ -1,0 +1,104 @@
+# GameAdapter：接口核验与边界
+
+## 核验对象与证据
+
+- 核验日期：2026-11-13；对象为本机安装的 `Probably Stolen_Data/Managed/Assembly-CSharp.dll`。
+- SHA-256：`725cb999d019dff1ff31bed353c7f9bb8d81a7605a15de1f80f5a3a6cf7b1d05`。
+- 使用任务指定的 ILSpy 11.2.0.10050 定向研究 UI、物品、容器和输入处理类型；没有全量导出工程，没有把反编译实现、游戏 DLL 或资源加入交付。
+- [适配器源码](../src/GameAdapter.cs) 对真实游戏程序集编译成功，`netstandard2.1`，0 warnings / 0 errors。编译不是 Unity 中的实际游玩验证；本次没有安装或启动/操作游戏来测试开店、交易、对话、睡眠、拖放或保存。
+- 参考[官方模组指南](https://github.com/dragonpan2/probably-stolen-modding/blob/main/ModdingGuide.zh-CN.md)，实际 API 和副作用以本机 DLL 核验为准。
+
+编译命令（主工程由 Lead 维护，本人未改其源码/引用配置）：
+
+```sh
+dotnet build ProbablyStolenMcp.csproj --no-restore -v minimal
+```
+
+需要游戏自带的 `Assembly-CSharp`、`Newtonsoft.Json`、`UnityEngine.CoreModule`、`UnityEngine.UI`、`UnityEngine.UIModule`、`UnityEngine.IMGUIModule`、`UnityEngine.TextRenderingModule`、`Unity.TextMeshPro`。不随 Mod 分发这些 DLL。
+
+## 公共入口与执行约束
+
+```csharp
+namespace ProbablyStolenMcp
+{
+    public sealed class GameAdapter
+    {
+        public Newtonsoft.Json.Linq.JObject Execute(string operation, JObject arguments);
+        public void Reset();
+    }
+}
+```
+
+- **Execute 与 Reset 必须全部在 Unity 主线程调用。** 主线程调度、网络授权、请求/响应大小及错误脱敏由 transport 保证。
+- 不接受类型名、成员名、路径、脚本、表达式、控制台命令或任意反射请求。
+- 未知 operation、未知字段、参数类型/枚举/范围错误抛 `ArgumentException`；过期句柄、游戏条件、隐藏/禁用/遮挡等失败抛 `InvalidOperationException`。transport 不应向客户端暴露堆栈或任意原生异常信息。
+- 每次 observe 使用新的随机 snapshot 和随机 handle；有效期 30 秒，场景切换、Reset、下一次 observe 均失效。操作抵达 `Mutate` 后，包括实时可见性检查失败，均清空整个快照；更早的 JSON/schema/未知 handle 错误不保证消耗快照。客户端在**每次 mutation 尝试之后都重新 observe**，不重试旧 handle。
+- 参数的字符串长度按 Unicode scalar values 计数，拒绝未配对 surrogate；UI 输出会替换无效 UTF-16，截断不会切开 surrogate pair。实际游戏输入框的 characterLimit 仍遵循 Unity 自己的 UTF-16 计数。
+
+## 协议
+
+所有对象禁止额外字段；snapshot/handle/target 均为 1..128 字符字符串。
+
+| operation | arguments | 说明 |
+|---|---|---|
+| `observe` | `{offset?: integer >= 0, limit?: integer 1..100}` | offset 默认 0、limit 默认 50；刷新 snapshot，返回当前画面可见候选条目。每一页 observe 都是新快照，不能拼接旧页句柄。 |
+| `inventory` | `{snapshot, offset?: integer >= 0, limit?: integer 1..100}` | 同一 observe 缓存中仍然可见的 item/inventory 分页；不遍历隐藏背包、不刷新 snapshot。默认同上。 |
+| `ui_action` | `{snapshot, handle, action?: "click"\|"double_click"\|"scroll_up"\|"scroll_down"}` | 默认 click；double_click 仅 world；scroll 仅 ScrollRect 或原生可滚动库存。 |
+| `ui_input` | `{snapshot, handle, value: string (0..2048)}` | 输入框逐字原生编辑；Toggle 精确字符串 `true`/`false`；Dropdown 为现有选项十进制 index；Slider 为 invariant-culture 有限数、位于原范围、满足 whole_numbers。 |
+| `item_action` | `{snapshot, handle, action: "open"\|"examine"\|"activate"\|"toggle"}` | 原生物品路径；不暴露不完整的选择待用/目标消费流程。 |
+| `move_item` | `{snapshot, handle, target, x: finite number, y: finite number, amount?: integer 1..2147483647}` | handle 为源 item，target 为可见 inventory；amount 默认 1；原生规则可能仅移动部分，返回实际 `moved`。 |
+
+`offset` 上限为 Int32.MaxValue。`x/y` 为 viewport 像素，**左下角为原点**，不是浏览器常见左上角坐标；必须在当前屏幕内并实时射线命中目标容器的可见空白区域。不能凭这些参数点击/操作其他目标。
+
+### observe 返回结构
+
+- `snapshot`, `scene`, `screen: {width,height,origin:"bottom_left"}`。
+- `entries`, `offset`, `limit`, `total`, `next_offset`, `truncated`。
+- `in_run`, `blocked_sensitive_screen`, `snapshot_ttl_seconds`, `supported_operations`。
+- 最多缓存 4096 个条目；每页最多 100 条，另有约 384 KiB 的条目 JSON 字节预算。文本/标签通常截至 512 UTF-16 单元；输入值至 4096；Dropdown 至 100 个选项并附 `options_total`。字节预算可能令本页少于 limit，按 `next_offset` 继续。
+- kind 可为 `button`, `pixel_button`, `world`, `input`, `toggle`, `dropdown`, `slider`, `scroll`, `item`, `inventory`, `text`。text 没有 action handle。
+- 可动作条目包含随机 `handle`、可见采样点 `x/y` 和 UI 的 `bounds`（world 为 null）。bounds 只是几何提示，**不保证矩形内每一点可点击/可放置**；裁切、遮挡和物品占用仍由实时射线及原生规则判断。
+- item 附带 `count`, `container`, `examinable`, `owned`, `candidate_actions`, `actions_checked_at_execution`, `inventory_label`, `width_cells`, `height_cells`；父容器有可见空白句柄时附 `inventory_handle`。
+- `candidate_actions` 只根据已存在的窗口、委托和静态标志提供提示，**不是运行条件已满足的承诺**。observe 不执行任意 May/Can 游戏委托，避免其潜在标签副作用；真正操作时才做完整条件检查。
+- inventory 附 `drop_point_required`, `point_must_hit_empty_area`, `scrollable`，网格库存另外附宽/高格数。不导出所有 cell、整棵物品图、全部 tags、隐藏价格/剧情/顾客数据。
+- input 附 `character_limit`, `character_validation`, `line_type`, `writable`, `custom_validation`，供客户端先选择合适的值。
+
+mutation 成功表示**已向原生控件/路径分发且未抛异常**，不是交易、任务或异步动画已完成；通常返回 `{performed:true, observe_required:true}`。ui_input 另附 `actual_value`, `sanitized`, `control_unavailable`；控件关闭或进入敏感 UI 时 actual/sanitized 为 null，不继续读取。move_item 另附实际转移数量 `moved`，可能少于 amount。
+
+## 已核实的原生路径
+
+### UI / 世界交互
+
+- Unity `Button`、`Toggle`、`InputField`、`TMP_InputField`、`Dropdown`、`TMP_Dropdown`、`Slider` 和 `ScrollRect` 只从当前 loaded scene 中的 active objects 枚举，不用 `Resources.FindObjectsOfTypeAll` 读隐藏 prefab/资源。
+- 活跃性、控件 enabled、Selectable.IsInteractable、祖先 CanvasGroup、密码框、屏幕范围和 EventSystem 第一命中结果在 observe 与动作前检查。旧 handle 的标签、输入值、Dropdown 选项/选择等语义标记变化会拒绝，而不是点击复用后的控件。
+- 原生像素 UI 不全部使用 Unity Button。已核验 `SelectableElementHandler` 使用 raycast 找到 `SelectableElement`，检查 `isHidden/isDisabled` 后走 Hover → Press → Select/Deselect。适配器复用这条原生状态变化路径，并检查对应 handler 可用；不调用私有按钮回调或重建业务逻辑。
+- 世界 `Interactable` 使用实际 EventSystem 命中、可见 Renderer/摄像机前方、enabled/active、isAvailable/isPaused 过滤。click 走原生 pointer-enter/down/up/exit 路径，controlable 目标先按原选择流程清理旧选择；double_click 在真实选择路径后使用已核验的 `Interactable.OnDoubleClick`。
+- 定向核验了 `StoreShutterButton`、`StoreBedroll`、`StoreClientCounter`、`DialogUIManager` 等，原路径负责开/关店、睡眠确认和对话等游戏条件。没有直接开放 OpenShutter、奖励/造物、跳日、改钱、剧情触发等业务捷径。**这些 loop 具备交互入口，但尚未在运行游戏中验收。**
+- 若当前场景没有配置可用的世界 EventSystem raycaster，world 条目不会出现；不通过额外物理射线/任意方法调用绕过。
+
+### 输入校验
+
+- 当前 DLL 的 `TMP_InputField.text` setter **不执行**正常逐字符校验，因此不用于填写。
+- 适配器只在已授权的可见输入控件上，通过其公开 `ProcessEvent` 送入 SelectAll、Backspace 和逐字符事件，走原生 `onValidateInput`、内建 CharacterValidation/Regex/CustomValidator、characterLimit 等，再提交原控件的 end-edit 通知。不注入全局键盘、不使用剪贴板、不执行字符串命令。
+- readonly/密码框、长度上限、不支持的控制字符等在编辑前拒绝；具体游戏 validator 可以过滤/改写字符，`actual_value`/`sanitized` 明确报告最终结果。
+- 原生 onValueChanged 可以实时生效；逐字编辑**不是事务**，某个回调拒绝、控件中途关闭或抛异常时可能已部分修改。不会假装回滚，也不会重复运行自定义 validator 去模拟事务。错误后必须 observe。
+
+### 物品与拖放
+
+- 物品对象来自当前可见 `TreeNodeRender.element`，不查找目录工厂、不生成 ID、不遍历隐藏仓库。显示名称读取现有 name/identifier，不调用 `GetDisplayName(true)`，因为它可能间接进入 `GetTagReadonly`。
+- 核实 `TagSystem.IsTag` 为现有字典读取；用于 effective ownership/display-only 判断不会补建 tag。observe 不调用 `GetTagReadonly`、`GetUniqueID`、真实属性计算、onUsed、May/Can 委托或会排序真实容器的搜索方法。
+- open 使用 `ItemMouseDoubleClickHandler.OpenContentAction`，额外要求窗口未锁、item 有效归玩家拥有、输入 handler 可用；examine 使用其 OpenExamineAction。
+- activate/toggle 分别要求原生 May 与 Can 为真，再调用 `ActivateSlotItem` / `ToggleSlotItem`。尊重原生允许的非拥有 document 交互，不强行统一改成所有物品都可用或都不可用。
+- 核实原生 `TrySelectItem` 只开启待用选择，目标点击另由输入轮询处理，不能独立完成消费。因此初版明确**不开放 use/指定目标消费**，避免 Agent 进入无法完成或取消的选择态。
+- move 先验证源仍可见、目标仍可见且指定点第一命中为该 inventory 空白；再检查 handler/pin/drag 锁、源 `MayRemove()` 与 `MaxNumRemove()`、目标 `GeneralHelper.MayPlayerInsertInto`。`MayRemove` 包含源容器移除锁和祖先非拥有容器限制。
+- 以新的 `GridShapeBuilder(item.modifiedShape)` 调用 `TryInventorySlot`，要求 `numTransfer > 0`，再 `TryAcceptOnce(amount)`。由原生 slot 路径处理数量、形状、接收谓词、状态/模块规则、父节点和 add/remove 事件；不调用 UncheckedAccept/AcceptUnchecked、不先手工从源删除。
+
+## 刻意保留的限制 / 安全边界
+
+1. **主菜单无动作**：in_run 需要 `PlayerStore.HasInstance`（不会创建实例）、同一 active loaded scene 上启用的 StoreUIManager/EmporiumEntry、已存在玩家库存和 UI/EventSystem。主菜单可返回非敏感可见文本，但不发 action handles；请由人类先载入测试存档。没有调用会惰性 new PlayerStore 的 `PlayerStore.Instance`。
+2. 排除 Mod 配置/信任/审批管理、token/password/bearer/api-key UI、F8 Quantum Console、F9/debug/spawner、主菜单和存档管理等已识别祖先/原生窗口。发现 Mod 管理或敏感原生窗口打开时，整个 observe 帧不输出 UI。通用确认框不能被拿来审批 Mod 信任。过滤有意保守，可能隐藏名称包含敏感关键词的合法游戏内容；这不是面向恶意第三方 Mod 的通用信息流沙箱。
+3. 所有 `requiresHold` 像素控件和带 `IHoldClickable` 的 world 对象均不暴露；不伪造等待时长，也不调用最终回调绕过长按。
+4. 没有显式物品目标使用/消费、液体倾倒、装备后目标点击、旋转/翻转、自动堆叠、递归容器搜索/自动摆放、卸载机器、context-menu 任意函数或全局按键工具。只开放可独立完成的 open/examine/activate/toggle。
+5. move 只支持当前可见 inventory 的空白 drop；满容器、采样点全部被挡的容器、drop 在其他 item 上的堆叠/容器插入不暴露。原生坐标放置不适用的特殊容器允许返回规则拒绝。
+6. 文本可见性依据原生渲染/canvas/cull/alpha/屏幕位置与射线遮挡，几何取样有意保守；未支持世界相机移动、拖动窗口、复杂 IMGUI、任意事件接口或特殊手绘 UI。
+7. 尚未进行 Unity 内端到端验收。必须在测试存档逐项验证：开店 → 可见顾客/对话 → 输入/交易确认 → 关闭店铺 → 睡眠；还需验证 modal 遮挡、旧 snapshot、切场景、密码/配置/控制台屏蔽、非法/部分输入、物品所有权/锁/模块以及满库存/部分转移。不得把真实 DLL 编译或离线纯 helper 测试称为这些验收已通过。

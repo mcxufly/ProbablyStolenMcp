@@ -1,0 +1,12 @@
+bin/
+obj/
+dist/
+.tools/
+.dotnet/
+.nuget/
+.inspect/
+__pycache__/
+*.pyc
+*.zip
+*.log
+.env

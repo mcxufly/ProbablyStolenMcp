@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Multiple standalone test projects must not share restore/apphost caches. -->
+    <BaseIntermediateOutputPath>obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

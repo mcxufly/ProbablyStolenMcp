@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "probably-stolen": {
+      "command": "python3",
+      "args": ["/ABSOLUTE/PATH/TO/ProbablyStolenMcp/bridge/server.py"],
+      "env": {
+        "PS_MCP_PORT": "17653",
+        "PS_MCP_TOKEN": "REPLACE_WITH_YOUR_PRIVATE_TOKEN"
+      }
+    }
+  }
+}
