@@ -18,6 +18,8 @@ namespace ProbablyStolenMcp
     {
         private const int MaxEntries = 4096;
         private const int MaxText = 512;
+        private const int MaxNativeGraphics = 256;
+        private static readonly Vector2[] PointFractions = { new Vector2(.5f, .5f), new Vector2(.15f, .15f), new Vector2(.85f, .15f), new Vector2(.15f, .85f), new Vector2(.85f, .85f) };
         private readonly Dictionary<string, Entry> handles = new Dictionary<string, Entry>(StringComparer.Ordinal);
         private readonly List<Entry> entries = new List<Entry>();
         private string snapshot;
@@ -139,8 +141,18 @@ namespace ProbablyStolenMcp
                 }
                 foreach (var node in Object.FindObjectsOfType<TreeNodeRender>().OrderBy(c => c.GetInstanceID()))
                 {
+                    if (!Allowed(node)) continue;
+                    // A window's X is a bare event-bearing node, not a SelectableElement.
+                    var window = node.window;
+                    if (window != null && window.IsVisible() && !seen.Contains(window))
+                    {
+                        seen.Add(window);
+                        var close = WindowCloseNode(window);
+                        if (close != null && TryPoint(close, window, out var closePoint))
+                            Add("window_close", close, window, closePoint, "× " + Clip(window.titleString, MaxText), new JObject { ["action"] = "click" });
+                    }
                     object native = node.element;
-                    if (native == null || seen.Contains(native) || !Allowed(node)) continue;
+                    if (native == null || seen.Contains(native)) continue;
                     if (!(native is SelectableElement || native is GameItemElement || native is GameInventory)) continue;
                     seen.Add(native);
                     Component visual = node;
@@ -160,7 +172,9 @@ namespace ProbablyStolenMcp
                     else if (native is GameInventory)
                     {
                         if (!TryPoint(visual, native, out var p)) continue;
-                        Add("inventory", visual, native, p, Clip(WindowTitle(node), MaxText), InventoryData(native));
+                        var data = InventoryData(native);
+                        data["empty_drop_point"] = new JObject { ["x"] = Math.Round(p.x, 2), ["y"] = Math.Round(p.y, 2) };
+                        Add("inventory", visual, native, p, Clip(WindowTitle(node), MaxText), data);
                     }
                 }
                 foreach (var scroll in Object.FindObjectsOfType<ScrollRect>().OrderBy(c => c.GetInstanceID()))
@@ -186,6 +200,7 @@ namespace ProbablyStolenMcp
             observedAt = Time.realtimeSinceStartup;
             var result = Page(entries, offset, limit);
             result["scene"] = Clip(SceneManager.GetActiveScene().name, 128);
+            result["mod_version"] = ModEntry.Version;
             result["screen"] = new JObject { ["width"] = Screen.width, ["height"] = Screen.height, ["origin"] = "bottom_left" };
             result["in_run"] = InRun();
             result["blocked_sensitive_screen"] = SensitiveScreen();
@@ -263,6 +278,8 @@ namespace ProbablyStolenMcp
         {
             if (!Allowed(e.Component) || e.SemanticStamp != SemanticStamp(e)) return false;
             if (e.Kind == "world") return WorldEnabled(e.Component as Interactable) && WorldHit(e.Component as Interactable, e.Point);
+            if (e.Kind == "window_close" && (!(e.Native is PixelWindow window) || !window.IsVisible() ||
+                WindowCloseNode(window) != e.Component)) return false;
             if (e.Native is GameItemElement item && (item.IsDestroyed() || item.isDebugMenu || GeneralHelper.IsDisplayOnly(item))) return false;
             if (e.Native is SelectableElement pixel && (pixel.isHidden || pixel.isDisabled || pixel.requiresHold ||
                 SelectableElementHandler.current == null || !SelectableElementHandler.current.isActiveAndEnabled)) return false;
@@ -272,6 +289,7 @@ namespace ProbablyStolenMcp
 
         private static string SemanticStamp(Entry e)
         {
+            if (e.Kind == "window_close" && e.Native is PixelWindow window) return "close|" + Clip(window.titleString, MaxText);
             if (e.Native is GameItemElement item) return Clip(item.name ?? item.identifier, MaxText);
             if (e.Native is SelectableElement pixel) return PixelLabel(pixel);
             if (e.Native is GameInventory) return WindowTitle((TreeNodeRender)e.Component);
@@ -316,6 +334,17 @@ namespace ProbablyStolenMcp
                 return;
             }
             if (action != "click") throw new ArgumentException("double_click is only available on world handles");
+            if (e.Kind == "window_close")
+            {
+                // Dispatch only the verified X node's own native handlers, never arbitrary event nodes.
+                var closePointer = Pointer(e.Point);
+                ExecuteEvents.Execute(e.Component.gameObject, closePointer, ExecuteEvents.pointerEnterHandler);
+                ExecuteEvents.Execute(e.Component.gameObject, closePointer, ExecuteEvents.pointerDownHandler);
+                ExecuteEvents.Execute(e.Component.gameObject, closePointer, ExecuteEvents.pointerUpHandler);
+                ExecuteEvents.Execute(e.Component.gameObject, closePointer, ExecuteEvents.pointerClickHandler);
+                ExecuteEvents.Execute(e.Component.gameObject, closePointer, ExecuteEvents.pointerExitHandler);
+                return;
+            }
             if (e.Native is SelectableElement pixel)
             {
                 pixel.Hover(); pixel.Press();
@@ -459,8 +488,12 @@ namespace ProbablyStolenMcp
         private static bool WorldEnabled(Interactable world)
         {
             if (!Allowed(world) || !world.isAvailable || Interactable.isPaused || !PlayerStore.HasInstance) return false;
-            // Hold interactions require elapsed player input; do not synthesize or bypass them.
-            return world.GetComponent<IHoldClickable>() == null;
+            var hold = world.GetComponent<IHoldClickable>();
+            if (hold == null) return true;
+            // Only this audited native control has a state-dependent hold requirement.
+            // Never invoke arbitrary mod-provided ShouldRequireHold implementations.
+            var bell = world.GetComponent<StoreBell>();
+            return ReferenceEquals(hold, bell) && EmporiumOption.Instance != null && !bell.ShouldRequireHold();
         }
 
         private static bool TryWorldPoint(Interactable world, out Vector2 point)
@@ -490,22 +523,53 @@ namespace ProbablyStolenMcp
             return target != null && target.GetComponentInParent<Interactable>() == world;
         }
 
+        private static TreeNodeRender WindowCloseNode(PixelWindow window)
+        {
+            // Literal game type + literal field; never accepts a caller-selected member.
+            return window == null ? null : ModReflect.Get<TreeNodeRender>(window, "topCloseButton");
+        }
+
+        private static IEnumerable<RectTransform> HitRects(Component component, object native)
+        {
+            if (native is PixelWindow)
+            {
+                // The caller is the verified X node, not the whole window.
+                if (component.transform is RectTransform closeRect) yield return closeRect;
+                yield break;
+            }
+            if (!(native is PixelElement element))
+            {
+                if (component.transform is RectTransform rect) yield return rect;
+                yield break;
+            }
+            if (element.handler == null || !Allowed(element.handler)) yield break;
+            // Native element handlers are logical roots and commonly have zero size.
+            // Only sample their actual active graphics that resolve back to this exact element;
+            // nested items and child controls must not donate points to their containing inventory.
+            foreach (var graphic in element.handler.GetComponentsInChildren<Graphic>().Take(MaxNativeGraphics))
+            {
+                if (!graphic.isActiveAndEnabled || !graphic.raycastTarget || graphic.color.a <= .01f || graphic.canvasRenderer.cull ||
+                    graphic.canvasRenderer.GetInheritedAlpha() <= .01f || !Allowed(graphic)) continue;
+                var node = graphic.GetComponent<TreeNodeRender>();
+                if (node != null && ReferenceEquals(node.FindParentElement(), native)) yield return graphic.rectTransform;
+            }
+        }
+
         private static bool TryPoint(Component component, object native, out Vector2 point)
         {
             point = Vector2.zero;
-            var rect = component.transform as RectTransform;
-            if (native is GameItemElement item) rect = item.rectTransform;
-            if (native is SelectableElement selectable) rect = selectable.rectTransform;
-            if (rect == null) return false;
-            var canvas = rect.GetComponentInParent<Canvas>();
-            if (canvas == null || !canvas.isActiveAndEnabled) return false;
-            Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-            // A center plus inset samples supports irregular items and partially clipped controls, without offscreen coordinates.
-            foreach (var fraction in new[] { new Vector2(.5f, .5f), new Vector2(.15f, .15f), new Vector2(.85f, .15f), new Vector2(.15f, .85f), new Vector2(.85f, .85f) })
+            foreach (var rect in HitRects(component, native))
             {
-                Vector2 local = rect.rect.min + Vector2.Scale(rect.rect.size, fraction);
-                point = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(local));
-                if (Hit(component, native, point)) return true;
+                if (rect.rect.width <= 0 || rect.rect.height <= 0) continue;
+                var canvas = rect.GetComponentInParent<Canvas>();
+                if (canvas == null || !canvas.isActiveAndEnabled) continue;
+                Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+                foreach (var fraction in PointFractions)
+                {
+                    Vector2 local = rect.rect.min + Vector2.Scale(rect.rect.size, fraction);
+                    point = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(local));
+                    if (Hit(component, native, point)) return true;
+                }
             }
             return false;
         }
@@ -516,10 +580,14 @@ namespace ProbablyStolenMcp
             var hits = Raycast(point);
             if (hits.Count == 0 || hits[0].gameObject == null) return false;
             var hit = hits[0].gameObject;
+            if (native is PixelWindow window)
+                return window.IsVisible() && WindowCloseNode(window) == component && hit == component.gameObject;
             if (native != null)
             {
+                // Match native RaycastElement's nearest-element ownership. Unlike its search
+                // loop, do not skip a non-TreeNode UI blocker in front of the native surface.
                 var node = hit.GetComponent<TreeNodeRender>();
-                return node != null && ReferenceEquals(node.FindParentElement(), native);
+                return node != null && Allowed(node) && ReferenceEquals(node.FindParentElement(), native);
             }
             return hit == component.gameObject || hit.transform.IsChildOf(component.transform);
         }
@@ -628,6 +696,8 @@ namespace ProbablyStolenMcp
             {
                 ["count"] = item.unitCount, ["container"] = item.contentWindow != null, ["examinable"] = item.examineWindow != null,
                 ["owned"] = GeneralHelper.IsItemEffectivelyOwned(item), ["candidate_actions"] = actions,
+                ["short_description"] = SensitiveWords(item.shortDescription) ? "" : Clip(item.shortDescription, MaxText),
+                ["flavor_text"] = SensitiveWords(item.flavorText) ? "" : Clip(item.flavorText, MaxText),
                 ["actions_checked_at_execution"] = true, ["inventory_label"] = Clip(WindowTitle(node), MaxText),
                 ["width_cells"] = item.modifiedShape?.width, ["height_cells"] = item.modifiedShape?.height
             };
@@ -646,16 +716,18 @@ namespace ProbablyStolenMcp
 
         private static JToken Bounds(Component component, object native)
         {
-            var rect = component.transform as RectTransform;
-            if (native is GameItemElement item) rect = item.rectTransform;
-            if (native is SelectableElement selectable) rect = selectable.rectTransform;
-            if (rect == null) return JValue.CreateNull();
-            var canvas = rect.GetComponentInParent<Canvas>();
-            if (canvas == null) return JValue.CreateNull();
-            Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
-            var corners = new Vector3[4];
-            rect.GetWorldCorners(corners);
-            var points = corners.Select(p => RectTransformUtility.WorldToScreenPoint(camera, p)).ToArray();
+            var points = new List<Vector2>();
+            foreach (var rect in HitRects(component, native))
+            {
+                if (rect.rect.width <= 0 || rect.rect.height <= 0) continue;
+                var canvas = rect.GetComponentInParent<Canvas>();
+                if (canvas == null || !canvas.isActiveAndEnabled) continue;
+                Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+                var corners = new Vector3[4];
+                rect.GetWorldCorners(corners);
+                points.AddRange(corners.Select(p => RectTransformUtility.WorldToScreenPoint(camera, p)));
+            }
+            if (points.Count == 0) return JValue.CreateNull();
             return new JObject
             {
                 ["x_min"] = Math.Round(points.Min(p => p.x), 2), ["y_min"] = Math.Round(points.Min(p => p.y), 2),

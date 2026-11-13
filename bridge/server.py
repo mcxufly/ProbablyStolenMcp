@@ -342,7 +342,7 @@ class McpServer:
             self.version = requested if requested in VERSIONS else VERSIONS[-1]
             return {"protocolVersion": self.version,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.1.1"},
+                    "serverInfo": {"name": "probably-stolen-mcp", "version": "0.1.2"},
                     "instructions": INSTRUCTIONS}
         if not self.initialized:
             raise RpcFailure(-32002, "Complete initialize and notifications/initialized first")

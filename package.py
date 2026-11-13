@@ -36,7 +36,7 @@ def main():
         z.write(ROOT / "README.md", "README.md")
         z.write(ROOT / "mcp-config.example.json", "mcp-config.example.json")
         z.write(ROOT / "AGENT.md", "AGENT.md")
-        for name in ("API-NOTES.md", "RESULTS.md"):
+        for name in ("API-NOTES.md", "RESULTS.md", "LIVE-2026-11-13.md"):
             z.write(ROOT / "verification" / name, "verification/" + name)
     source_archive = ROOT / "dist" / f"ProbablyStolenMcp-{version}-source.zip"
     top_level = (".gitignore", "ProbablyStolenMcp.csproj", "build.sh", "package.py",
